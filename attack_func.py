@@ -1,5 +1,7 @@
 import os
 import time
+from statistics import median
+
 import torch
 import numpy as np
 import utils
@@ -35,108 +37,132 @@ import torchvision.transforms as transforms
 torch.autograd.set_detect_anomaly(True)
 
 
-def test_tfattk_hidden(model,
-                       model_list,
-                       device,
-                       hidden_config,
-                       train_options,
-                       val_dataset,
-                       train_type,
-                       model_type,
-                       # attk_param,
-                       data_name,
-                       # pp,
-                       wm_method,
-                       target,
-                       smooth,
-                       attk_param=None,
-                       pp=None,
-                       watermark_length=30,
-                       target_length=30,
-                       ):
-    dir_string = './wevade_perturb_' + wm_method + '_to_' + target + '_' + model_type + '_' + str(
-        watermark_length) + '_to_' + str(target_length) + 'bits/' + train_type
-    if not os.path.exists(dir_string):
-        os.makedirs(dir_string)
-
-    # Configure logging to write messages with level INFO or higher to a file
-    logging.basicConfig(filename=os.path.join(dir_string, 'results.log'), filemode='w', level=logging.INFO)
-
+def get_val_data_loader(data_name, hidden_config, train_options, val_dataset, train=False):
     if 'DB' in data_name:
-        val_data = utils.get_data_loaders_DB(hidden_config, train_options, dataset=val_dataset, train=False)
-
-        validation_losses = defaultdict(AverageMeter)
-        logging.info('Running validation for transfer attack')
-        num = 0
-        for batch in tqdm(iter(val_data)):
-            num += 1
-            image = batch['image'].to(device)
-            message = torch.load(
-                './message/' + str(hidden_config.message_length) + 'bits_message_' + str(num) + '.pth').to(device)
-            losses, (encoded_images, attk_images, decoded_messages), num = tfattk_validate_on_batch(model,
-                                                                                                    [image, message],
-                                                                                                    model_list, num,
-                                                                                                    train_type,
-                                                                                                    model_type,
-                                                                                                    attk_param, pp,
-                                                                                                    wm_method, target,
-                                                                                                    smooth=smooth)
-            for name, loss in losses.items():
-                validation_losses[name].update(loss)
-
-        utils.log_progress(validation_losses)
-
+        val_data = utils.get_data_loaders_DB(hidden_config, train_options, dataset=val_dataset, train=train)
+        data_type = 'batch_dict'
+        max_batches = None
     elif 'midjourney' in data_name:
-        val_data = utils.get_data_loaders_midjourney(hidden_config, train_options, dataset=val_dataset, train=False)
-
-        validation_losses = defaultdict(AverageMeter)
-        logging.info('Running validation for transfer attack')
-        num = 0
-        for image, _ in iter(val_data):
-            num += 1
-            image = image.to(device)
-            message = torch.load(
-                './message/' + str(hidden_config.message_length) + 'bits_message_' + str(num) + '.pth').to(device)
-            losses, (encoded_images, attk_images, decoded_messages), num = tfattk_validate_on_batch(model,
-                                                                                                    [image, message],
-                                                                                                    model_list, num,
-                                                                                                    train_type,
-                                                                                                    model_type,
-                                                                                                    attk_param, pp,
-                                                                                                    wm_method, target,
-                                                                                                    smooth=smooth)
-            for name, loss in losses.items():
-                validation_losses[name].update(loss)
-
-        utils.log_progress(validation_losses)
-
+        val_data = utils.get_data_loaders_midjourney(hidden_config, train_options, dataset=val_dataset, train=train)
+        data_type = 'image_label'
+        max_batches = None
     elif 'nlb' in data_name:
         val_data = utils.get_data_loaders_nlb(hidden_config, train_options, dataset=val_dataset)
+        data_type = 'image_label'
+        max_batches = 1
+    else:
+        raise ValueError(f"Unknown data_name: {data_name}")
+    return val_data, data_type, max_batches
 
-        validation_losses = defaultdict(AverageMeter)
-        logging.info('Running validation for transfer attack')
-        num = 0
-        for image, _ in iter(val_data):
-            num += 1
+
+def test_tfattk_hidden(
+        model,
+        model_list,
+        device,
+        hidden_config,
+        train_options,
+        val_dataset,
+        train_type,
+        model_type,
+        data_name,
+        wm_method,
+        target,
+        smooth,
+        attk_param=None,
+        pp=None,
+        watermark_length=30,
+        target_length=30,
+        num_models=1,
+):
+    dir_string = (
+            'results/' +
+            wm_method + '_to_' + target + '_' + model_type + '_' +
+            str(watermark_length) + '_to_' + str(target_length) + 'bits' + train_type + '_' + str(num_models) + 'models'
+    )
+    if not os.path.exists('results'):
+        os.makedirs('results')
+
+    # Configure logging to write messages with level INFO or higher to a file
+    logging.basicConfig(filename=dir_string + '.log', filemode='w', level=logging.INFO)
+
+    # Get the validation data loader and data_type
+    val_data, data_type, max_batches = get_val_data_loader(data_name, hidden_config, train_options, val_dataset,
+                                                           train=False)
+
+    validation_losses = defaultdict(AverageMeter)
+    logging.info('Running validation for transfer attack')
+    num = 0
+
+    for data in tqdm(iter(val_data)):
+        num += 1
+        if data_type == 'batch_dict':
+            image = data['image'].to(device)
+        elif data_type == 'image_label':
+            image, _ = data
             image = image.to(device)
-            message = torch.load(
-                './message/' + str(hidden_config.message_length) + 'bits_message_' + str(num) + '.pth').to(device)
-            losses, (encoded_images, attk_images, decoded_messages), num = tfattk_validate_on_batch(model,
-                                                                                                    [image, message],
-                                                                                                    model_list, num,
-                                                                                                    train_type,
-                                                                                                    model_type,
-                                                                                                    attk_param, pp,
-                                                                                                    wm_method, target,
-                                                                                                    smooth=smooth)
-            for name, loss in losses.items():
-                validation_losses[name].update(loss)
-            if num == 1:
-                break
+        else:
+            raise ValueError(f"Unknown data_type: {data_type}")
+
+        message_path = './message/' + str(hidden_config.message_length) + 'bits_message_' + str(num) + '.pth'
+        message = torch.load(message_path).to(device)
+
+        losses, (encoded_images, attk_images, decoded_messages), num = tfattk_validate_on_batch(
+            model, [image, message], model_list, num, train_type, model_type,
+            attk_param, pp, wm_method, target, smooth=smooth
+        )
+
+        for name, loss in losses.items():
+            validation_losses[name].update(loss)
+
+        if max_batches is not None and num >= max_batches:
+            break
+
+    utils.log_progress(validation_losses)
 
 
-def tfattk_validate_on_batch(model: Hidden, batch: list, model_list: list, num: int, train_type: str, model_type: str,
+def compute_tdr_avg(decoded_rounded, decoded_rounded_attk, messages, smooth, median_bitwise_errors=None):
+    threshold2_numerators = {
+        20: 2,
+        30: 5,
+        48: 11,
+        64: 17
+    }
+
+    message_length = messages.size(1)
+    if message_length in threshold2_numerators:
+        threshold2_numerator = threshold2_numerators[message_length]
+        threshold1_numerator = message_length - threshold2_numerator
+        threshold1 = threshold1_numerator / message_length
+        threshold2 = threshold2_numerator / message_length
+    else:
+        raise ValueError(f"Unsupported message length: {message_length}")
+
+    messages_numpy = messages.detach().cpu().numpy()
+    decoded_numpy = decoded_rounded
+    bit_errors = np.sum(np.abs(decoded_numpy - messages_numpy), axis=1)
+    per_message_accuracy = 1 - bit_errors / message_length
+    tdr_avg_1 = np.mean(per_message_accuracy > threshold1)
+    tdr_avg_2 = np.mean(per_message_accuracy < threshold2)
+
+    if smooth:
+        if median_bitwise_errors is None:
+            raise ValueError("median_bitwise_errors must be provided when smooth is True")
+        per_message_accuracy_attk = 1 - median_bitwise_errors / message_length
+    else:
+        decoded_attk_numpy = decoded_rounded_attk
+        bit_errors_attk = np.sum(np.abs(decoded_attk_numpy - messages_numpy), axis=1)
+        per_message_accuracy_attk = 1 - bit_errors_attk / message_length
+
+    tdr_avg_attk_1 = np.mean(per_message_accuracy_attk > threshold1)
+    tdr_avg_attk_2 = np.mean(per_message_accuracy_attk < threshold2)
+
+    return tdr_avg_1, tdr_avg_2, tdr_avg_attk_1, tdr_avg_attk_2
+
+
+def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, train_type: str, model_type: str,
                              attk_param: float, pp: str, wm_method, target, encode_wm=True, white=False, smooth=False):
+    # model must have encoder and decoder
+
     images, messages = batch
 
     batch_size = images.shape[0]
@@ -147,14 +173,14 @@ def tfattk_validate_on_batch(model: Hidden, batch: list, model_list: list, num: 
         model.encoder.eval()
         model.decoder.eval()
         ###
-        model.discriminator.eval()
+        # model.discriminator.eval()
         with torch.no_grad():
-            d_target_label_cover = torch.full((batch_size, 1), model.cover_label, device=model.device)
-            d_target_label_encoded = torch.full((batch_size, 1), model.encoded_label, device=model.device)
-            g_target_label_encoded = torch.full((batch_size, 1), model.cover_label, device=model.device)
+            # d_target_label_cover = torch.full((batch_size, 1), model.cover_label, device=model.device)
+            # d_target_label_encoded = torch.full((batch_size, 1), model.encoded_label, device=model.device)
+            # g_target_label_encoded = torch.full((batch_size, 1), model.cover_label, device=model.device)
 
-            d_on_cover = model.discriminator(images)
-            d_loss_on_cover = model.bce_with_logits_loss(d_on_cover, d_target_label_cover.float())
+            # d_on_cover = model.discriminator(images)
+            # d_loss_on_cover = model.bce_with_logits_loss(d_on_cover, d_target_label_cover.float())
 
             encoded_images = model.encoder(images, messages)
     else:
@@ -198,17 +224,17 @@ def tfattk_validate_on_batch(model: Hidden, batch: list, model_list: list, num: 
             else:
                 decoded_messages_attk = model.decoder(attk_images)
 
-            d_on_encoded = model.discriminator(encoded_images)
-            d_loss_on_encoded = model.bce_with_logits_loss(d_on_encoded, d_target_label_encoded.float())
+            # d_on_encoded = model.discriminator(encoded_images)
+            # d_loss_on_encoded = model.bce_with_logits_loss(d_on_encoded, d_target_label_encoded.float())
 
-            d_on_encoded_for_enc = model.discriminator(encoded_images)
-            g_loss_adv = model.bce_with_logits_loss(d_on_encoded_for_enc, g_target_label_encoded.float())
+            # d_on_encoded_for_enc = model.discriminator(encoded_images)
+            # g_loss_adv = model.bce_with_logits_loss(d_on_encoded_for_enc, g_target_label_encoded.float())
 
-            d_on_attk = model.discriminator(attk_images)
-            d_loss_on_attk = model.bce_with_logits_loss(d_on_attk, d_target_label_encoded.float())
+            # d_on_attk = model.discriminator(attk_images)
+            # d_loss_on_attk = model.bce_with_logits_loss(d_on_attk, d_target_label_encoded.float())
 
-            d_on_attk_for_enc = model.discriminator(attk_images)
-            g_loss_adv_attk = model.bce_with_logits_loss(d_on_attk_for_enc, g_target_label_encoded.float())
+            # d_on_attk_for_enc = model.discriminator(attk_images)
+            # g_loss_adv_attk = model.bce_with_logits_loss(d_on_attk_for_enc, g_target_label_encoded.float())
 
             if model.vgg_loss is None:
                 g_loss_enc = model.mse_loss(encoded_images, images)
@@ -245,55 +271,15 @@ def tfattk_validate_on_batch(model: Hidden, batch: list, model_list: list, num: 
         else:
             bitwise_avg_err_attk = np.sum(np.abs(decoded_rounded_attk - messages.detach().cpu().numpy())) / (
                     batch_size * messages.shape[1])
+            median_bitwise_errors = None
 
-        if messages.size(1) == 20:
-            tdr_avg_1 = np.mean((1 - np.sum(np.abs(decoded_rounded - messages.detach().cpu().numpy()), axis=1) /
-                                 messages.shape[1]) > 18 / 20)
-            tdr_avg_2 = np.mean((1 - np.sum(np.abs(decoded_rounded - messages.detach().cpu().numpy()), axis=1) /
-                                 messages.shape[1]) < 2 / 20)
-            if smooth:
-                tdr_avg_attk_1 = np.mean((1 - median_bitwise_errors / messages.shape[1]) > 18 / 20)
-                tdr_avg_attk_2 = np.mean((1 - median_bitwise_errors / messages.shape[1]) < 2 / 20)
-            else:
-                tdr_avg_attk_1 = np.mean((1 - np.sum(np.abs(decoded_rounded_attk - messages.detach().cpu().numpy()),
-                                                     axis=1) / messages.shape[1]) > 18 / 20)
-                tdr_avg_attk_2 = np.mean((1 - np.sum(np.abs(decoded_rounded_attk - messages.detach().cpu().numpy()),
-                                                     axis=1) / messages.shape[1]) < 2 / 20)
-        elif messages.size(1) == 30:
-            tdr_avg_1 = np.mean((1 - np.sum(np.abs(decoded_rounded - messages.detach().cpu().numpy()), axis=1) /
-                                 messages.shape[1]) > 25 / 30)
-            tdr_avg_2 = np.mean((1 - np.sum(np.abs(decoded_rounded - messages.detach().cpu().numpy()), axis=1) /
-                                 messages.shape[1]) < 5 / 30)
-            if smooth:
-                tdr_avg_attk_1 = np.mean((1 - median_bitwise_errors / messages.shape[1]) > 25 / 30)
-                tdr_avg_attk_2 = np.mean((1 - median_bitwise_errors / messages.shape[1]) < 5 / 30)
-            else:
-                tdr_avg_attk_1 = np.mean((1 - np.sum(np.abs(decoded_rounded_attk - messages.detach().cpu().numpy()),
-                                                     axis=1) / messages.shape[1]) > 25 / 30)
-                tdr_avg_attk_2 = np.mean((1 - np.sum(np.abs(decoded_rounded_attk - messages.detach().cpu().numpy()),
-                                                     axis=1) / messages.shape[1]) < 5 / 30)
-        elif messages.size(1) == 48:
-            tdr_avg_1 = np.mean((1 - np.sum(np.abs(decoded_rounded - messages.detach().cpu().numpy()), axis=1) /
-                                 messages.shape[1]) > 37 / 48)
-            tdr_avg_2 = np.mean((1 - np.sum(np.abs(decoded_rounded - messages.detach().cpu().numpy()), axis=1) /
-                                 messages.shape[1]) < 11 / 48)
-            tdr_avg_attk_1 = np.mean((1 - np.sum(np.abs(decoded_rounded_attk - messages.detach().cpu().numpy()),
-                                                 axis=1) / messages.shape[1]) > 37 / 48)
-            tdr_avg_attk_2 = np.mean((1 - np.sum(np.abs(decoded_rounded_attk - messages.detach().cpu().numpy()),
-                                                 axis=1) / messages.shape[1]) < 11 / 48)
-        elif messages.size(1) == 64:
-            tdr_avg_1 = np.mean((1 - np.sum(np.abs(decoded_rounded - messages.detach().cpu().numpy()), axis=1) /
-                                 messages.shape[1]) > 47 / 64)
-            tdr_avg_2 = np.mean((1 - np.sum(np.abs(decoded_rounded - messages.detach().cpu().numpy()), axis=1) /
-                                 messages.shape[1]) < 17 / 64)
-            if smooth:
-                tdr_avg_attk_1 = np.mean((1 - median_bitwise_errors / messages.shape[1]) > 47 / 64)
-                tdr_avg_attk_2 = np.mean((1 - median_bitwise_errors / messages.shape[1]) < 17 / 64)
-            else:
-                tdr_avg_attk_1 = np.mean((1 - np.sum(np.abs(decoded_rounded_attk - messages.detach().cpu().numpy()),
-                                                     axis=1) / messages.shape[1]) > 47 / 64)
-                tdr_avg_attk_2 = np.mean((1 - np.sum(np.abs(decoded_rounded_attk - messages.detach().cpu().numpy()),
-                                                     axis=1) / messages.shape[1]) < 17 / 64)
+        tdr_avg_1, tdr_avg_2, tdr_avg_attk_1, tdr_avg_attk_2 = compute_tdr_avg(
+            decoded_rounded,
+            decoded_rounded_attk,
+            messages,
+            smooth,
+            median_bitwise_errors
+        )
 
     ssim_value = []
     for i in range(encoded_images.shape[0]):
@@ -325,11 +311,11 @@ def tfattk_validate_on_batch(model: Hidden, batch: list, model_list: list, num: 
             'tdr                 ': tdr_avg_1 + tdr_avg_2,
             'tdr_attk            ': tdr_avg_attk_1 + tdr_avg_attk_2,
             'ssim                ': np.mean(ssim_value),
-            'adversarial_bce     ': g_loss_adv.item(),
-            'adversarial_bce_attk': g_loss_adv_attk.item(),
-            'discr_cover_bce     ': d_loss_on_cover.item(),
-            'discr_encod_bce     ': d_loss_on_encoded.item(),
-            'discr_attk_bce      ': d_loss_on_attk.item()
+            # 'adversarial_bce     ': g_loss_adv.item(),
+            # 'adversarial_bce_attk': g_loss_adv_attk.item(),
+            # 'discr_cover_bce     ': d_loss_on_cover.item(),
+            # 'discr_encod_bce     ': d_loss_on_encoded.item(),
+            # 'discr_attk_bce      ': d_loss_on_attk.item()
         }
     else:
         if model is not None:

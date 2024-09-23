@@ -25,7 +25,7 @@ def main():
     data_dir = ''
     batch_size = 100
     epochs = 200
-    num_models = 100
+    num_models = 1
     name = '30bits_AT_DALLE_200epochs_50maintrain'
     size = 128
     # target mesage length
@@ -96,19 +96,17 @@ def main():
                                                 enable_fp16=enable_fp16
                                                 )
     else:
-        raise NotImplementedError
+        target_config = None
 
     # Model
     noiser = Noiser(noise_config, device)
     model = Hidden(target_config, device, noiser, model_type)
 
-    if 'DB' in data_name:
-        if target == 'hidden':
-            target_cp_file = './target model/' + target + '_' + train_type + '/' + str(
-                message) + 'bits_' + model_type + '_' + train_type + '.pth'
-    elif 'midjourney' in data_name:
-        if target == 'hidden':
-            target_cp_file = './target model/' + str(message) + 'bits_' + model_type + '_AT_midjourney.pth'
+    if target == 'hidden':
+        if 'DB' in data_name:
+            target_cp_file = f'./target model/{target}_{train_type}/{message}bits_{model_type}_{train_type}.pth'
+        elif 'midjourney' in data_name:
+            target_cp_file = f'./target model/{message}bits_{model_type}_AT_midjourney.pth'
 
     sur_cp_folder = './surrogate model/' + wm_method + '/' + train_type + '/'
 
@@ -134,7 +132,7 @@ def main():
 
     test_tfattk_hidden(model, sur_model_list, device, target_config, train_options, val_dataset, train_type, model_type,
                        data_name,
-                       wm_method, target, smooth, target_length=30)
+                       wm_method, target, smooth, target_length=30, num_models=num_models)
 
 
 if __name__ == '__main__':
