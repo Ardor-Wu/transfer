@@ -25,9 +25,10 @@ def main():
     data_dir = ''
     batch_size = 100
     epochs = 200
-    num_models = 10
+    num_models = 100
     name = '30bits_AT_DALLE_200epochs_50maintrain'
     size = 128
+    # target mesage length
     message = 30  # 64
     train_dataset = 'large_random_10k'
     val_dataset = 'large_random_1k'
@@ -67,7 +68,7 @@ def main():
                                          enable_fp16=enable_fp16
                                          )
 
-    if target == 'hidden':
+    if target in ['hidden']:
         if model_type == 'cnn':
             target_config = HiDDenConfiguration(H=size, W=size,
                                                 message_length=message,
@@ -94,6 +95,8 @@ def main():
                                                 adversarial_loss=1e-3,
                                                 enable_fp16=enable_fp16
                                                 )
+    else:
+        raise NotImplementedError
 
     # Model
     noiser = Noiser(noise_config, device)
@@ -131,7 +134,7 @@ def main():
 
     test_tfattk_hidden(model, sur_model_list, device, target_config, train_options, val_dataset, train_type, model_type,
                        data_name,
-                       wm_method, target, smooth)
+                       wm_method, target, smooth, target_length=30)
 
 
 if __name__ == '__main__':

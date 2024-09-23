@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="madison ssh pair (6)" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="qilong3@madison.ece.illinois.edu:22" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
-      <paths name="madison ssh pair (6)">
+      <paths name="qilong3@madison.ece.illinois.edu:22">
         <serverdata>
           <mappings>
             <mapping deploy="/scratch/qilong3/transferattack" local="$PROJECT_DIR$" />

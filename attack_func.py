@@ -51,14 +51,24 @@ def test_tfattk_hidden(model,
                        smooth,
                        attk_param=None,
                        pp=None,
+                       watermark_length=30,
+                       target_length=30,
                        ):
+    dir_string = './wevade_perturb_' + wm_method + '_to_' + target + '_' + model_type + '_' + str(
+        watermark_length) + '_to_' + str(target_length) + 'bits/' + train_type
+    if not os.path.exists(dir_string):
+        os.makedirs(dir_string)
+
+    # Configure logging to write messages with level INFO or higher to a file
+    logging.basicConfig(filename=os.path.join(dir_string, 'results.log'), filemode='w', level=logging.INFO)
+
     if 'DB' in data_name:
         val_data = utils.get_data_loaders_DB(hidden_config, train_options, dataset=val_dataset, train=False)
 
         validation_losses = defaultdict(AverageMeter)
         logging.info('Running validation for transfer attack')
         num = 0
-        for batch in iter(val_data):
+        for batch in tqdm(iter(val_data)):
             num += 1
             image = batch['image'].to(device)
             message = torch.load(
@@ -353,6 +363,7 @@ def tfattk_validate_on_batch(model: Hidden, batch: list, model_list: list, num: 
                 'ssim                ': np.mean(ssim_value),
             }
             return losses, num
+    # print(losses)
     return losses, (encoded_images, attk_images, decoded_messages), num
 
 
@@ -425,7 +436,8 @@ def wevade_transfer_batch(all_watermarked_image, target_length, model_list, wate
                 target_watermark_list.append(target_watermark)
         target_watermark_list = torch.stack(target_watermark_list)
 
-        for _ in tqdm(range(iteration)):
+        # for _ in tqdm(range(iteration)):
+        for _ in range(iteration):
             if continue_processing_mask.all() == False:
                 # Mask the watermarked images that don't need further processing
                 watermarked_image = all_watermarked_image[continue_processing_mask]
@@ -480,9 +492,10 @@ def wevade_transfer_batch(all_watermarked_image, target_length, model_list, wate
                         rounded_decoded_watermark - target_watermark_list[idx][continue_processing_mask]).sum(
                         dim=1) / watermark_length)
                 # bit_acc_target, _ = torch.min(bit_acc_target, dim=0)
-                bit_acc_target = torch.mean(bit_acc_target, dim=0)
-
-                print(bit_acc_target)
+                # bit_acc_target = torch.mean(bit_acc_target, dim=0)
+                bit_acc_target = torch.mean(bit_acc_target).item()
+                # print('bit_acc_target:', bit_acc_target)
+                # print(bit_acc_target)
 
                 perturbation = watermarked_image - watermarked_image_cloned[continue_processing_mask]
                 all_perturbations[continue_processing_mask] = perturbation
