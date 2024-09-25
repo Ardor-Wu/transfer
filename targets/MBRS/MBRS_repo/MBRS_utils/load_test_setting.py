@@ -5,7 +5,7 @@ import time
 '''
 params setting
 '''
-filename = "MBRS_repo/test_settings.json"
+filename = "targets/MBRS_repo/test_settings.json"
 settings = JsonConfig()
 settings.load_json_file(filename)
 

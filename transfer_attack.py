@@ -1,3 +1,5 @@
+from numpy.ma.core import argsort
+
 from model.hidden import Hidden
 # from model.stega import stegamodel
 from noise_layers.noiser import Noiser
@@ -11,6 +13,7 @@ from attack_func import test_tfattk_hidden
 # from attack_theory_flip_all import test_tfattk_DB_theory
 import logging
 import torchvision.transforms as transforms
+from targets.MBRS.MBRS import MBRS
 
 
 def main():
@@ -19,17 +22,29 @@ def main():
     set all parameters here!
     ========================
     '''
-    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
+    parser = argparse.ArgumentParser(description='Transfer Attack')
+    parser.add_argument('--num_models', type=int, default=10, help='number of surrogate models')
+    parser.add_argument('--target', type=str, default='hidden', help='target model')
+    parser.add_argument('--target_length', type=int, default=30, help='target message length')
+    parser.add_argument('--device', type=int, default=0, help='device')
+    parser.add_argument('--no_optimization', action='store_true',
+                        help='Disable optimization (set to True when specified)')
+    parser.add_argument('--PA', type=str, default='mean', help='PA for non-optimization method')
+    args = parser.parse_args()
+
+    device = torch.device('cuda:' + str(args.device)) if torch.cuda.is_available() else torch.device('cpu')
     # device = 'cuda:' + str(device)
-    seed = 42
+    # seed = 42
     data_dir = ''
     batch_size = 100
     epochs = 200
-    num_models = 1
+    num_models = args.num_models
+
+    # num_models = 10
+    # change num models to read from arguments
+
     name = '30bits_AT_DALLE_200epochs_50maintrain'
     size = 128
-    # target mesage length
-    message = 30  # 64
     train_dataset = 'large_random_10k'
     val_dataset = 'large_random_1k'
     tensorboard = False
@@ -38,10 +53,21 @@ def main():
     train_type = 'AT'
     data_name = 'DB'
     wm_method = 'hidden'
-    target = 'hidden'
     model_type = 'cnn'  # 'resnet'
     white = False
     smooth = False
+
+    # surrogate message length
+    message = 30
+
+    target_length = args.target_length
+
+    fixed_message = False
+
+    target = args.target
+
+    PA = args.PA
+    optimization = not args.no_optimization
 
     start_epoch = 1
     train_options = TrainingOptions(
@@ -68,10 +94,10 @@ def main():
                                          enable_fp16=enable_fp16
                                          )
 
-    if target in ['hidden']:
+    if target in ['hidden', 'mbrs']:  # mbrs also needs this config
         if model_type == 'cnn':
             target_config = HiDDenConfiguration(H=size, W=size,
-                                                message_length=message,
+                                                message_length=target_length,
                                                 encoder_blocks=4, encoder_channels=64,
                                                 decoder_blocks=7, decoder_channels=64,
                                                 use_discriminator=True,
@@ -84,7 +110,7 @@ def main():
                                                 )
         elif model_type == 'resnet':
             target_config = HiDDenConfiguration(H=size, W=size,
-                                                message_length=message,
+                                                message_length=target_length,
                                                 encoder_blocks=7, encoder_channels=64,
                                                 decoder_blocks=7, decoder_channels=64,
                                                 use_discriminator=True,
@@ -100,7 +126,8 @@ def main():
 
     # Model
     noiser = Noiser(noise_config, device)
-    model = Hidden(target_config, device, noiser, model_type)
+    if target == 'hidden':
+        model = Hidden(target_config, device, noiser, model_type)
 
     if target == 'hidden':
         if 'DB' in data_name:
@@ -118,6 +145,9 @@ def main():
         target_cp = torch.load(target_cp_file, map_location='cpu')
         utils.model_from_checkpoint(model, target_cp)
 
+    if target == 'mbrs':
+        model = MBRS(H=size, W=size, message_length=message, device=device)
+
     sur_model_list = []
     for idx in range(len(sur_cp_list)):
         if wm_method == 'hidden':
@@ -131,8 +161,8 @@ def main():
         utils.model_from_checkpoint(sur_model_list[idx], cp)
 
     test_tfattk_hidden(model, sur_model_list, device, target_config, train_options, val_dataset, train_type, model_type,
-                       data_name,
-                       wm_method, target, smooth, target_length=30, num_models=num_models)
+                       data_name, wm_method, target, smooth, target_length=target_length, num_models=num_models,
+                       fixed_message=fixed_message, optimization=optimization, PA=PA)
 
 
 if __name__ == '__main__':

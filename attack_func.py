@@ -34,6 +34,8 @@ import imageio
 from PIL import Image
 import torchvision.transforms as transforms
 
+# from targets.MBRS.MBRS_repo.test import message
+
 torch.autograd.set_detect_anomaly(True)
 
 
@@ -73,12 +75,26 @@ def test_tfattk_hidden(
         watermark_length=30,
         target_length=30,
         num_models=1,
+        fixed_message=False,
+
+        optimization=True,
+        PA='mean'
 ):
     dir_string = (
             'results/' +
             wm_method + '_to_' + target + '_' + model_type + '_' +
             str(watermark_length) + '_to_' + str(target_length) + 'bits' + train_type + '_' + str(num_models) + 'models'
     )
+    if fixed_message:
+        dir_string += '_fixed_message'
+
+    if not optimization:
+        dir_string += '_no_optimization'
+        if PA == 'mean':
+            dir_string += '_mean'
+        elif PA == 'median':
+            dir_string += '_median'
+
     if not os.path.exists('results'):
         os.makedirs('results')
 
@@ -103,12 +119,28 @@ def test_tfattk_hidden(
         else:
             raise ValueError(f"Unknown data_type: {data_type}")
 
-        message_path = './message/' + str(hidden_config.message_length) + 'bits_message_' + str(num) + '.pth'
-        message = torch.load(message_path).to(device)
+        if fixed_message:
+            watermark_message = '0001101101000010001110111010101010001100010111001011100110011010101010100100101110010101110000011000000110101001000100101011011010111100011010000010000010101111100111010101111101010010110000101101100110101110000011100010001110101010010001110000001101001101'
+            # Convert each bit character to a float (0.0 or 1.0)
+            message_bits = [float(bit) for bit in watermark_message[:hidden_config.message_length]]
+
+            # Create a PyTorch tensor from the list of floats
+            message = torch.tensor(message_bits, dtype=torch.float).to(device)
+            batch_size = image.shape[0]  # Assuming image is a tensor with shape [batch_size, ...]
+            # Repeat the message and flatten
+            message = message.repeat(batch_size)
+            message = message.view(batch_size, -1)
+        else:
+            if hidden_config.message_length == 30:
+                message_path = './message/' + str(hidden_config.message_length) + 'bits_message_' + str(num) + '.pth'
+                message = torch.load(message_path).to(device)
+            else:
+                message = torch.randint(0, 2, (image.size(0), hidden_config.message_length)).float().to(device)
 
         losses, (encoded_images, attk_images, decoded_messages), num = tfattk_validate_on_batch(
             model, [image, message], model_list, num, train_type, model_type,
-            attk_param, pp, wm_method, target, smooth=smooth
+            attk_param, pp, wm_method, target, smooth=smooth, fixed_message=fixed_message, optimization=optimization,
+            PA=PA
         )
 
         for name, loss in losses.items():
@@ -160,7 +192,8 @@ def compute_tdr_avg(decoded_rounded, decoded_rounded_attk, messages, smooth, med
 
 
 def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, train_type: str, model_type: str,
-                             attk_param: float, pp: str, wm_method, target, encode_wm=True, white=False, smooth=False):
+                             attk_param: float, pp: str, wm_method, target, encode_wm=True, white=False, smooth=False,
+                             fixed_message=False, optimization=True, PA='mean'):
     # model must have encoder and decoder
 
     images, messages = batch
@@ -193,7 +226,7 @@ def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, tra
                                   lr=2, r=0.5, epsilon=0.2, num=num,
                                   name='flipratio_batch', train_type=train_type,
                                   model_type=model_type, batch_size=len(model_list), wm_method=wm_method, target=target,
-                                  white=white)
+                                  white=white, fixed_message=fixed_message, optimization=optimization, PA=PA)
 
     with torch.no_grad():
         attk_images = encoded_images + noise
@@ -235,7 +268,7 @@ def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, tra
 
             # d_on_attk_for_enc = model.discriminator(attk_images)
             # g_loss_adv_attk = model.bce_with_logits_loss(d_on_attk_for_enc, g_target_label_encoded.float())
-
+            '''
             if model.vgg_loss is None:
                 g_loss_enc = model.mse_loss(encoded_images, images)
                 g_loss_enc_attk = model.mse_loss(attk_images, images)
@@ -245,9 +278,10 @@ def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, tra
                 vgg_on_enc_attk = model.vgg_loss(attk_images)
                 g_loss_enc = model.mse_loss(vgg_on_cov, vgg_on_enc)
                 g_loss_enc_attk = model.mse_loss(vgg_on_cov, vgg_on_enc_attk)
-
+    
             g_loss_dec = model.mse_loss(decoded_messages, messages)
             g_loss_dec_attk = model.mse_loss(decoded_messages_attk, messages)
+            '''
         else:
             if model is not None:
                 decoded_messages = model(encoded_images_tdr) + 0.5
@@ -297,15 +331,15 @@ def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, tra
 
     if encode_wm:
         losses = {
-            'encoder_mse         ': g_loss_enc.item(),
-            'encoder_mse_attk    ': g_loss_enc_attk.item(),
+            # 'encoder_mse         ': g_loss_enc.item(),
+            # 'encoder_mse_attk    ': g_loss_enc_attk.item(),
             'noise (L-infinity)  ': torch.mean(
                 torch.norm((encoded_images - attk_images).view(encoded_images.size(0), -1), p=float('inf'),
                            dim=1)).item(),
             'noise (L-2)         ': torch.mean(
                 torch.norm((encoded_images - attk_images).view(encoded_images.size(0), -1), p=2, dim=1)).item(),
-            'dec_mse             ': g_loss_dec.item(),
-            'dec_mse_attk        ': g_loss_dec_attk.item(),
+            # 'dec_mse             ': g_loss_dec.item(),
+            # 'dec_mse_attk        ': g_loss_dec_attk.item(),
             'bitwise-acc         ': 1 - bitwise_avg_err,
             'bitwise-acc_attk    ': 1 - bitwise_avg_err_attk,
             'tdr                 ': tdr_avg_1 + tdr_avg_2,
@@ -384,23 +418,56 @@ def project(param_data, backup, epsilon):
 
 
 def wevade_transfer_batch(all_watermarked_image, target_length, model_list, watermark_length, iteration, lr, r, epsilon,
-                          num, name, train_type, model_type, batch_size, wm_method, target, white=False):
+                          num, name, train_type, model_type, batch_size, wm_method, target, white=False,
+                          fixed_message=False, optimization=True, PA='mean'):
     watermarked_image_cloned = all_watermarked_image.clone()
     criterion = nn.MSELoss(reduction='mean')
-    path = './wevade_perturb_' + wm_method + '_to_' + target + '_' + model_type + '_' + str(
-        watermark_length) + '_to_' + str(target_length) + 'bits/' + train_type + '/ensemble_model' + str(
-        len(model_list)) + '_' + \
-           name + '_' + str(batch_size) + '_' + str(int((1 - epsilon) * 100)) + '_batch_' + str(num) + '.pth'
-    if white:
-        path = path.replace('.pth', '_white.pth')
+    # Construct base directory
+    base_dir = f'./wevade_perturb_{wm_method}_to_{target}_{model_type}_{watermark_length}_to_{target_length}bits/{train_type}'
 
-    if not os.path.exists('./wevade_perturb_' + wm_method + '_to_' + target + '_' + model_type + '_' + str(
-            watermark_length) + '_to_' + str(target_length) + 'bits/' + train_type):
-        os.makedirs('./wevade_perturb_' + wm_method + '_to_' + target + '_' + model_type + '_' + str(
-            watermark_length) + '_to_' + str(target_length) + 'bits/' + train_type)
+    # Ensure the directory exists
+    if not os.path.exists(base_dir):
+        os.makedirs(base_dir)
+
+    # Construct filename with 'fixed_message' information
+    filename = (
+        f'ensemble_model{len(model_list)}_{name}_{batch_size}_'
+        f'{int((1 - epsilon) * 100)}_batch_{num}'
+    )
+
+    if fixed_message:
+        filename += '_fixed'
+
+    if white:
+        filename += '_white'
+
+    if not optimization:
+        filename += '_no_optimization'
+        if PA == 'mean':
+            filename += '_mean'
+        elif PA == 'median':
+            filename += '_median'
+
+    filename += '.pth'
+
+    # Combine base directory and filename to get the full path
+    path = os.path.join(base_dir, filename)
 
     if os.path.exists(path):
         all_perturbations = torch.load(path, map_location='cpu').to(all_watermarked_image.device)
+    elif optimization == False:
+        watermarks = []
+        for idx, sur_model in enumerate(model_list):
+            sur_model.encoder.eval()
+            watermark = sur_model.encoder(all_watermarked_image) - all_watermarked_image
+            watermarks.append(watermark)
+        watermarks = torch.stack(watermarks)
+        if PA == 'mean':
+            all_perturbations = watermarks.mean(dim=0)
+        elif PA == 'median':
+            all_perturbations = watermarks.median(dim=0)
+        else:
+            raise ValueError(f"Unsupported PA: {PA}")
     else:
         target_watermark_list = []
 

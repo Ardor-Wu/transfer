@@ -1,0 +1,27 @@
+#!/bin/bash
+
+# Arrays of parameters
+nums=(1 5 10 20 30 40 60 80 100)
+targets=("mbrs" "hidden")
+device=0  # Use GPU 0 for all tasks
+
+# Loop over targets and nums to generate and execute commands sequentially
+for target in "${targets[@]}"; do
+    # Set target_length based on target
+    if [ "$target" == "mbrs" ]; then
+        target_length=64
+    elif [ "$target" == "hidden" ]; then
+        target_length=30
+    else
+        echo "Unknown target: $target"
+        exit 1
+    fi
+
+    for n in "${nums[@]}"; do
+        cmd="python transfer_attack.py --num_models $n --target $target --target_length $target_length --device $device"
+        echo "Running: $cmd"
+        eval "$cmd"
+    done
+done
+
+echo "All tasks have been completed."

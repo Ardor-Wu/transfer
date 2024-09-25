@@ -11,8 +11,9 @@ class Encoder_MP(nn.Module):
         self.H = H
         self.W = W
 
-        message_convT_blocks = int(np.log2(H // int(np.sqrt(message_length)))) # if H=256, message_length=36, then this will be 5; if message_length=64
-        #message_convT_blocks = 4
+        message_convT_blocks = int(np.log2(H // int(
+            np.sqrt(message_length))))  # if H=256, message_length=36, then this will be 5; if message_length=64
+        # message_convT_blocks = 4
         message_se_blocks = max(blocks - message_convT_blocks, 1)
 
         self.image_pre_layer = ConvBNRelu(3, channels)
@@ -22,7 +23,7 @@ class Encoder_MP(nn.Module):
             ConvBNRelu(1, channels),
             ExpandNet(channels, channels, blocks=message_convT_blocks),
             SENet(channels, channels, blocks=message_se_blocks),
-        ) # then this will be 192*192, 6*2^5=192
+        )  # then this will be 192*192, 6*2^5=192
 
         self.message_first_layer = SENet(channels, channels, blocks=blocks)
 
@@ -35,6 +36,8 @@ class Encoder_MP(nn.Module):
         image_pre = self.image_pre_layer(image)
         intermediate1 = self.image_first_layer(image_pre)
 
+        # convert message to float
+        message = message.float()
         # Message Processor
         size = int(np.sqrt(message.shape[1]))
         message_image = message.view(-1, 1, size, size)
