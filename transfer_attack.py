@@ -25,10 +25,12 @@ def main():
     parser = argparse.ArgumentParser(description='Transfer Attack')
     parser.add_argument('--num_models', type=int, default=10, help='number of surrogate models')
     parser.add_argument('--target', type=str, default='hidden', help='target model')
-    parser.add_argument('--target_length', type=int, default=30, help='target message length')
+    parser.add_argument('--target_length', type=int, default=-1, help='target message length')
     parser.add_argument('--device', type=int, default=0, help='device')
     parser.add_argument('--no_optimization', action='store_true',
                         help='Disable optimization (set to True when specified)')
+    parser.add_argument('--normalized', action='store_true',
+                        help='Normalize the watermark (set to True when specified)')
     parser.add_argument('--PA', type=str, default='mean', help='PA for non-optimization method')
     args = parser.parse_args()
 
@@ -61,6 +63,11 @@ def main():
     message = 30
 
     target_length = args.target_length
+    if target_length == -1:
+        if args.target == 'hidden':
+            target_length = 30
+        elif args.target == 'mbrs':
+            target_length = 64
 
     fixed_message = False
 
@@ -68,6 +75,11 @@ def main():
 
     PA = args.PA
     optimization = not args.no_optimization
+    if args.normalized:
+        assert not optimization
+        budget = 0.25
+    else:
+        budget = None
 
     start_epoch = 1
     train_options = TrainingOptions(
@@ -162,7 +174,7 @@ def main():
 
     test_tfattk_hidden(model, sur_model_list, device, target_config, train_options, val_dataset, train_type, model_type,
                        data_name, wm_method, target, smooth, target_length=target_length, num_models=num_models,
-                       fixed_message=fixed_message, optimization=optimization, PA=PA)
+                       fixed_message=fixed_message, optimization=optimization, PA=PA, budget=budget)
 
 
 if __name__ == '__main__':

@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 # Define the targets and ks
 targets = ['hidden', 'mbrs']
 ks = [1, 5, 10, 20, 30, 40, 60, 80, 100]
-
+#ks = [1, 2, 5, 10, 20, 30, 40, 50]
 # Initialize an empty list to collect the data
 data = []
 
@@ -51,19 +51,37 @@ df = df.sort_values(by=['target', 'k'])
 # List of metric columns to plot
 metric_columns = df.columns.difference(['target', 'k'])
 
+# Create 'plots' directory if it doesn't exist
+os.makedirs('plots', exist_ok=True)
+
 # Create plots for each metric
 for metric in metric_columns:
     plt.figure()
     for target in targets:
         subset = df[df['target'] == target]
-        plt.plot(subset['k'], subset[metric], marker='o', label=target)
+        if metric == 'tdr':
+            y_values = 1 - subset[metric]
+            ylabel = 'Evasion Rate'
+            title = 'Evasion Rate vs Number of Models (k)'
+            filename = 'Evasion_Rate_vs_k.png'
+        elif metric == 'tdr_attk':
+            y_values = 1 - subset[metric]
+            ylabel = 'Evasion Rate (Attacked)'
+            title = 'Evasion Rate (Attacked) vs Number of Models (k)'
+            filename = 'Evasion_Rate_Attacked_vs_k.png'
+        else:
+            y_values = subset[metric]
+            ylabel = metric.replace('_', ' ')
+            title = f'{metric.replace("_", " ")} vs Number of Models (k)'
+            filename = f'{metric}_vs_k.png'
+        plt.plot(subset['k'], y_values, marker='o', label=target)
     plt.xlabel('Number of Models (k)')
-    plt.ylabel(metric.replace('_', ' '))
-    plt.title(f'{metric.replace("_", " ")} vs Number of Models (k)')
+    plt.ylabel(ylabel)
+    plt.title(title)
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(f'plots/{metric}_vs_k.png')
+    plt.savefig(os.path.join('plots', filename))
     plt.close()
 
-print("Plots have been saved to the current directory.")
+print("Plots have been saved to the 'plots' directory.")

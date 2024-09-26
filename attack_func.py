@@ -78,7 +78,8 @@ def test_tfattk_hidden(
         fixed_message=False,
 
         optimization=True,
-        PA='mean'
+        PA='mean',
+        budget=None
 ):
     dir_string = (
             'results/' +
@@ -94,6 +95,8 @@ def test_tfattk_hidden(
             dir_string += '_mean'
         elif PA == 'median':
             dir_string += '_median'
+        if budget is not None:
+            dir_string += f'_budget_{budget}'
 
     if not os.path.exists('results'):
         os.makedirs('results')
@@ -140,7 +143,7 @@ def test_tfattk_hidden(
         losses, (encoded_images, attk_images, decoded_messages), num = tfattk_validate_on_batch(
             model, [image, message], model_list, num, train_type, model_type,
             attk_param, pp, wm_method, target, smooth=smooth, fixed_message=fixed_message, optimization=optimization,
-            PA=PA
+            PA=PA, budget=budget
         )
 
         for name, loss in losses.items():
@@ -193,7 +196,7 @@ def compute_tdr_avg(decoded_rounded, decoded_rounded_attk, messages, smooth, med
 
 def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, train_type: str, model_type: str,
                              attk_param: float, pp: str, wm_method, target, encode_wm=True, white=False, smooth=False,
-                             fixed_message=False, optimization=True, PA='mean'):
+                             fixed_message=False, optimization=True, PA='mean', budget=None):
     # model must have encoder and decoder
 
     images, messages = batch
@@ -226,7 +229,8 @@ def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, tra
                                   lr=2, r=0.5, epsilon=0.2, num=num,
                                   name='flipratio_batch', train_type=train_type,
                                   model_type=model_type, batch_size=len(model_list), wm_method=wm_method, target=target,
-                                  white=white, fixed_message=fixed_message, optimization=optimization, PA=PA)
+                                  white=white, fixed_message=fixed_message, optimization=optimization, PA=PA,
+                                  budget=budget)
 
     with torch.no_grad():
         attk_images = encoded_images + noise
@@ -419,7 +423,8 @@ def project(param_data, backup, epsilon):
 
 def wevade_transfer_batch(all_watermarked_image, target_length, model_list, watermark_length, iteration, lr, r, epsilon,
                           num, name, train_type, model_type, batch_size, wm_method, target, white=False,
-                          fixed_message=False, optimization=True, PA='mean'):
+                          fixed_message=False, optimization=True, PA='mean'
+                          , budget=None):
     watermarked_image_cloned = all_watermarked_image.clone()
     criterion = nn.MSELoss(reduction='mean')
     # Construct base directory
@@ -453,21 +458,31 @@ def wevade_transfer_batch(all_watermarked_image, target_length, model_list, wate
     # Combine base directory and filename to get the full path
     path = os.path.join(base_dir, filename)
 
-    if os.path.exists(path):
-        all_perturbations = torch.load(path, map_location='cpu').to(all_watermarked_image.device)
-    elif optimization == False:
+    if optimization == False:
         watermarks = []
         for idx, sur_model in enumerate(model_list):
             sur_model.encoder.eval()
-            watermark = sur_model.encoder(all_watermarked_image) - all_watermarked_image
-            watermarks.append(watermark)
+
+            with torch.no_grad():
+                sur_model.decoder.eval()
+                decoded_messages = sur_model.decoder(all_watermarked_image)
+                decoded_rounded = torch.clamp(torch.round(decoded_messages), 0, 1)
+                target_watermark = 1 - decoded_rounded
+                watermark = sur_model.encoder(all_watermarked_image, target_watermark) - all_watermarked_image
+                watermarks.append(watermark)
         watermarks = torch.stack(watermarks)
         if PA == 'mean':
             all_perturbations = watermarks.mean(dim=0)
         elif PA == 'median':
-            all_perturbations = watermarks.median(dim=0)
+            all_perturbations = watermarks.median(dim=0).values
         else:
             raise ValueError(f"Unsupported PA: {PA}")
+        if budget is not None:
+            l_inf = torch.norm(all_perturbations, p=float('inf'), dim=(1, 2, 3))
+            l_inf=l_inf.reshape(-1, 1, 1, 1)
+            all_perturbations = all_perturbations / l_inf * budget
+    elif os.path.exists(path):
+        all_perturbations = torch.load(path, map_location='cpu').to(all_watermarked_image.device)
     else:
         target_watermark_list = []
 
