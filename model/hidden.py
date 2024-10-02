@@ -118,11 +118,13 @@ class Hidden:
                     if choice == 0:
                         noise_layers = Identity()
                     elif choice == 1:
-                        noise_layers = DiffJPEG(random.randint(50, 99), self.device)
+                        noise_layers = DiffJPEG(random.randint(10, 99), self.device)
+                        # noise_layers = DiffJPEG(random.randint(50, 99), self.device)
                     elif choice == 2:
                         noise_layers = Gaussian(random.uniform(0, 0.1))
                     elif choice == 3:
-                        noise_layers = GaussianBlur(std=random.uniform(0, 1.0))
+                        # noise_layers = GaussianBlur(std=random.uniform(0, 1.0))
+                        noise_layers = GaussianBlur(std=random.uniform(0, 2.0))
                         # noise_layers = Crop(random.uniform(0.3, 0.7))
                     elif choice == 4:
                         # noise_layers = Resize(random.uniform(0.3, 0.7))
@@ -192,7 +194,7 @@ class Hidden:
         return losses, (encoded_images, decoded_messages)
         ###
 
-    def validate_on_batch(self, batch: list, test_noiser: str):
+    def validate_on_batch(self, batch: list, test_noiser='Identity'):
         """
         Runs validation on a single batch of data consisting of images and messages
         :param batch: batch of validation data, in form [images, messages]

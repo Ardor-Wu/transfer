@@ -76,7 +76,6 @@ def test_tfattk_hidden(
         target_length=30,
         num_models=1,
         fixed_message=False,
-
         optimization=True,
         PA='mean',
         budget=None

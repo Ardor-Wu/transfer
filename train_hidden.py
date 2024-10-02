@@ -3,6 +3,9 @@ import pprint
 import argparse
 import torch
 import pickle
+
+from pyarrow.dataset import dataset
+
 import utils
 import logging
 import sys
@@ -16,7 +19,7 @@ from train import train
 
 
 def main():
-    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    # device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
     parent_parser = argparse.ArgumentParser(description='Training of HiDDeN nets')
     subparsers = parent_parser.add_subparsers(dest='command', help='Sub-parser for commands')
@@ -42,6 +45,10 @@ def main():
     new_run_parser.add_argument('--noise', nargs='*', action=NoiseArgParser,
                                 help="Noise layers configuration. Use quotes when specifying configuration, e.g. 'cropout((0.55, 0.6), (0.55, 0.6))'")
 
+    new_run_parser.add_argument('--model_type', default='cnn', type=str)
+    new_run_parser.add_argument('--dataset', default='DB', type=str)
+    new_run_parser.add_argument('--gpu', default=0, type=int)
+
     new_run_parser.set_defaults(tensorboard=False)
     new_run_parser.set_defaults(enable_fp16=False)
 
@@ -51,11 +58,14 @@ def main():
     continue_parser.add_argument('--data-dir', '-d', required=False, type=str,
                                  help='The directory where the data is stored. Specify a value only if you want to override the previous value.')
     continue_parser.add_argument('--epochs', '-e', required=False, type=int,
-                                help='Number of epochs to run the simulation. Specify a value only if you want to override the previous value.')
+                                 help='Number of epochs to run the simulation. Specify a value only if you want to override the previous value.')
     # continue_parser.add_argument('--tensorboard', action='store_true',
     #                             help='Override the previous setting regarding tensorboard logging.')
 
     args = parent_parser.parse_args()
+
+    device = torch.device('cuda:' + str(args.gpu)) if torch.cuda.is_available() else torch.device('cpu')
+
     checkpoint = None
     loaded_checkpoint_file_name = None
 
@@ -63,7 +73,8 @@ def main():
         this_run_folder = args.folder
         options_file = os.path.join(this_run_folder, 'options-and-config.pickle')
         train_options, hidden_config, noise_config = utils.load_options(options_file)
-        checkpoint, loaded_checkpoint_file_name = utils.load_last_checkpoint(os.path.join(this_run_folder, 'checkpoints'))
+        checkpoint, loaded_checkpoint_file_name = utils.load_last_checkpoint(
+            os.path.join(this_run_folder, 'checkpoints'))
         train_options.start_epoch = checkpoint['epoch'] + 1
         if args.data_dir is not None:
             train_options.train_folder = os.path.join(args.data_dir, 'train')
@@ -108,7 +119,6 @@ def main():
             pickle.dump(noise_config, f)
             pickle.dump(hidden_config, f)
 
-
     logging.basicConfig(level=logging.INFO,
                         format='%(message)s',
                         handlers=[
@@ -124,7 +134,7 @@ def main():
         tb_logger = None
 
     noiser = Noiser(noise_config, device)
-    model = Hidden(hidden_config, device, noiser, tb_logger)
+    model = Hidden(hidden_config, device, noiser, model_type=args.model_type)
 
     if args.command == 'continue':
         # if we are continuing, we have to load the model params
@@ -140,7 +150,7 @@ def main():
     logging.info('\nTraining train_options:\n')
     logging.info(pprint.pformat(vars(train_options)))
 
-    train(model, device, hidden_config, train_options, this_run_folder, tb_logger)
+    train(model, device, hidden_config, train_options, this_run_folder, tb_logger, dataset=args.dataset)
 
 
 if __name__ == '__main__':

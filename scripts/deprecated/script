@@ -29,7 +29,7 @@ for target in "${targets[@]}"; do
         # Determine GPU index
         gpu_index=$((job_counter % 3))
         device=${gpus[$gpu_index]}
-        cmd="python transfer_attack.py --num_models $n --target $target --target_length $target_length --device $device"
+        cmd="python ../transfer_attack.py --num_models $n --target $target --target_length $target_length --device $device"
 
         # Append command to the corresponding GPU array
         if [ $gpu_index -eq 0 ]; then

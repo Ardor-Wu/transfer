@@ -1,8 +1,18 @@
 #!/bin/bash
 
+# Function to clean up background jobs
+cleanup() {
+    echo "Interrupt received. Killing background processes..."
+    kill -- -$$
+    exit 1
+}
+
+# Set trap to catch SIGINT
+trap 'cleanup' SIGINT
+
 # Arrays of parameters
 nums=(1 2 5 10 20 30 40 50)
-targets=("stega")
+targets=("RivaGAN")
 gpus=(0 1 2)
 
 # Arrays to hold commands for each GPU
@@ -22,6 +32,8 @@ for target in "${targets[@]}"; do
         target_length=30
     elif [ "$target" == "stega" ]; then
         target_length=100
+    elif [ "$target" == "RivaGAN" ]; then
+        target_length=32
     else
         echo "Unknown target: $target"
         exit 1
@@ -31,7 +43,7 @@ for target in "${targets[@]}"; do
         # Determine GPU index
         gpu_index=$((job_counter % 3))
         device=${gpus[$gpu_index]}
-        cmd="python transfer_attack.py --num_models $n --target $target --target_length $target_length --device $device"
+        cmd="python ../transfer_attack.py --num_models $n --target $target --target_length $target_length --device $device"
 
         # Append command to the corresponding GPU array
         if [ $gpu_index -eq 0 ]; then

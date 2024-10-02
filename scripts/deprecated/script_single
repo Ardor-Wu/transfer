@@ -18,7 +18,7 @@ for target in "${targets[@]}"; do
     fi
 
     for n in "${nums[@]}"; do
-        cmd="python transfer_attack.py --num_models $n --target $target --target_length $target_length --device $device"
+        cmd="python ../transfer_attack.py --num_models $n --target $target --target_length $target_length --device $device"
         echo "Running: $cmd"
         eval "$cmd"
     done

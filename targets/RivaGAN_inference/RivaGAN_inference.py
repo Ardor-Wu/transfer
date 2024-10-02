@@ -1,7 +1,6 @@
 import torch
 from imwatermark import WatermarkEncoder, WatermarkDecoder
 import numpy as np
-import cv2
 
 
 class RivaGAN:
@@ -111,7 +110,7 @@ class RivaGAN:
                 wm_keys.append(wm_key)
 
             # Convert list of keys to tensor
-            wm_keys = torch.tensor(wm_keys)
+            wm_keys = torch.tensor(np.array(wm_keys))
             # Move to the same device as input images
             wm_keys = wm_keys.to(images.device)
             return wm_keys
