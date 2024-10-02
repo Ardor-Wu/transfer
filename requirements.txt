@@ -1,0 +1,17 @@
+opencv-python
+diffusers
+torch
+torchvision
+transformers
+timm
+fairscale
+invisible-watermark
+kornia
+scikit-learn
+ftfy
+datasets
+accelerate
+bchlib
+matplotlib
+seaborn
+openai-clip

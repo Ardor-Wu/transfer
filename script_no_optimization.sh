@@ -3,7 +3,8 @@
 
 # Arrays of parameters
 nums=(1 2 5 10 20 30 40 50)
-targets=("mbrs" "hidden")
+#targets=("mbrs" "hidden")
+targets=("stega")
 pas=("mean" "median")
 gpus=(0 1 2)
 
@@ -22,7 +23,7 @@ for target in "${targets[@]}"; do
             # Determine GPU index
             gpu_index=$((job_counter % 3))
             device=${gpus[$gpu_index]}
-            cmd="python transfer_attack.py --num_models $n --target $target --PA $pa --device $device --no_optimization"
+            cmd="python transfer_attack.py --num_models $n --target $target --PA $pa --device $device --no_optimization --normalized"
             # Append command to the corresponding GPU array
             if [ $gpu_index -eq 0 ]; then
                 cmds_gpu0+=("$cmd")

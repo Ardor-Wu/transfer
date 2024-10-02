@@ -14,6 +14,8 @@ from attack_func import test_tfattk_hidden
 import logging
 import torchvision.transforms as transforms
 from targets.MBRS.MBRS import MBRS
+from targets.stegastamp.stega_stamp import StegaStampModel
+from targets.RivaGAN_inference.RivaGAN_inference import RivaGAN
 
 
 def main():
@@ -68,6 +70,10 @@ def main():
             target_length = 30
         elif args.target == 'mbrs':
             target_length = 64
+        elif args.target == 'stega':
+            target_length = 100
+        elif args.target == 'RivaGAN':
+            target_length = 32
 
     fixed_message = False
 
@@ -106,7 +112,7 @@ def main():
                                          enable_fp16=enable_fp16
                                          )
 
-    if target in ['hidden', 'mbrs']:  # mbrs also needs this config
+    if target in ['hidden', 'mbrs', 'stega', 'RivaGAN']:  # mbrs also needs this config
         if model_type == 'cnn':
             target_config = HiDDenConfiguration(H=size, W=size,
                                                 message_length=target_length,
@@ -159,6 +165,13 @@ def main():
 
     if target == 'mbrs':
         model = MBRS(H=size, W=size, message_length=message, device=device)
+
+    if target == 'stega':
+        model_path = '/scratch/qilong3/transferattack/targets/checkpoints/stegaStamp/stegastamp_pretrained'
+        model = StegaStampModel(model_path, device=device)
+
+    if target == 'RivaGAN':
+        model = RivaGAN(device=device)
 
     sur_model_list = []
     for idx in range(len(sur_cp_list)):

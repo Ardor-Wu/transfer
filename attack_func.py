@@ -159,8 +159,10 @@ def compute_tdr_avg(decoded_rounded, decoded_rounded_attk, messages, smooth, med
     threshold2_numerators = {
         20: 2,
         30: 5,
+        32: 5,
         48: 11,
-        64: 17
+        64: 17,
+        100: 31  # <1e-4 false positive rate
     }
 
     message_length = messages.size(1)
@@ -338,10 +340,10 @@ def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, tra
             # 'encoder_mse         ': g_loss_enc.item(),
             # 'encoder_mse_attk    ': g_loss_enc_attk.item(),
             'noise (L-infinity)  ': torch.mean(
-                torch.norm((encoded_images - attk_images).view(encoded_images.size(0), -1), p=float('inf'),
+                torch.norm((encoded_images - attk_images).reshape(encoded_images.size(0), -1), p=float('inf'),
                            dim=1)).item(),
             'noise (L-2)         ': torch.mean(
-                torch.norm((encoded_images - attk_images).view(encoded_images.size(0), -1), p=2, dim=1)).item(),
+                torch.norm((encoded_images - attk_images).reshape(encoded_images.size(0), -1), p=2, dim=1)).item(),
             # 'dec_mse             ': g_loss_dec.item(),
             # 'dec_mse_attk        ': g_loss_dec_attk.item(),
             'bitwise-acc         ': 1 - bitwise_avg_err,
@@ -479,7 +481,7 @@ def wevade_transfer_batch(all_watermarked_image, target_length, model_list, wate
             raise ValueError(f"Unsupported PA: {PA}")
         if budget is not None:
             l_inf = torch.norm(all_perturbations, p=float('inf'), dim=(1, 2, 3))
-            l_inf=l_inf.reshape(-1, 1, 1, 1)
+            l_inf = l_inf.reshape(-1, 1, 1, 1)
             all_perturbations = all_perturbations / l_inf * budget
     elif os.path.exists(path):
         all_perturbations = torch.load(path, map_location='cpu').to(all_watermarked_image.device)
@@ -510,8 +512,8 @@ def wevade_transfer_batch(all_watermarked_image, target_length, model_list, wate
                 # Mask the watermarked images that don't need further processing
                 watermarked_image = all_watermarked_image[continue_processing_mask]
             watermarked_image = watermarked_image.requires_grad_(True)
-            min_value, _ = torch.min(watermarked_image.view(watermarked_image.size(0), -1), dim=1, keepdim=True)
-            max_value, _ = torch.max(watermarked_image.view(watermarked_image.size(0), -1), dim=1, keepdim=True)
+            min_value, _ = torch.min(watermarked_image.reshape(watermarked_image.size(0), -1), dim=1, keepdim=True)
+            max_value, _ = torch.max(watermarked_image.reshape(watermarked_image.size(0), -1), dim=1, keepdim=True)
             min_value = min_value.view(watermarked_image.size(0), 1, 1, 1)
             max_value = max_value.view(watermarked_image.size(0), 1, 1, 1)
 

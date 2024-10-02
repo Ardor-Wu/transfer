@@ -20,10 +20,11 @@ import torch.nn.functional as F
 from options import HiDDenConfiguration, TrainingOptions
 from model.hidden import Hidden
 
-
 '''
 add new datasets for DiffusionDB
 '''
+
+
 def get_data_loaders_DB(hidden_config: HiDDenConfiguration, train_options: TrainingOptions, dataset: str, train: bool):
     """ Get torch data loaders for training and validation. The data loaders take a crop of the image,
     transform it into tensor, and normalize it."""
@@ -54,6 +55,7 @@ def get_data_loaders_DB(hidden_config: HiDDenConfiguration, train_options: Train
                                               shuffle=train, num_workers=4)
     return data_loader
 
+
 def get_data_loaders_DALLE(hidden_config: HiDDenConfiguration, train_options: TrainingOptions, train: bool, idx=None):
     """ Get torch data loaders for training and validation. The data loaders take a crop of the image,
     transform it into tensor, and normalize it."""
@@ -79,10 +81,12 @@ def get_data_loaders_DALLE(hidden_config: HiDDenConfiguration, train_options: Tr
 
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=train_options.batch_size,
                                               shuffle=train, num_workers=4)
-    
+
     return data_loader
 
-def get_data_loaders_midjourney(hidden_config: HiDDenConfiguration,train_options:TrainingOptions,dataset:str,train:bool):
+
+def get_data_loaders_midjourney(hidden_config: HiDDenConfiguration, train_options: TrainingOptions, dataset: str,
+                                train: bool):
     """ Get torch data loaders for training and validation. The data loaders take a crop of the image,
     transform it into tensor, and normalize it."""
     data_transforms = {
@@ -103,11 +107,11 @@ def get_data_loaders_midjourney(hidden_config: HiDDenConfiguration,train_options
         train_images = datasets.ImageFolder('./data/midjourney/val', data_transforms['test'])
 
     data_loader = torch.utils.data.DataLoader(train_images, batch_size=train_options.batch_size,
-                                                    shuffle=train, num_workers=4)
+                                              shuffle=train, num_workers=4)
     return data_loader
 
 
-def get_data_loaders_nlb(hidden_config: HiDDenConfiguration,train_options:TrainingOptions,dataset:str):
+def get_data_loaders_nlb(hidden_config: HiDDenConfiguration, train_options: TrainingOptions, dataset: str):
     """ Get torch data loaders for training and validation. The data loaders take a crop of the image,
     transform it into tensor, and normalize it."""
     data_transforms = {
@@ -125,11 +129,11 @@ def get_data_loaders_nlb(hidden_config: HiDDenConfiguration,train_options:Traini
     train_images = datasets.ImageFolder('./data/nlb_mj_image_128/small_dataset', data_transforms['test'])
 
     data_loader = torch.utils.data.DataLoader(train_images, batch_size=train_options.batch_size,
-                                                    shuffle=False, num_workers=4)
+                                              shuffle=False, num_workers=4)
     return data_loader
 
 
-def get_data_loaders_stablesign(model_config: HiDDenConfiguration,train_options:TrainingOptions):
+def get_data_loaders_stablesign(model_config: HiDDenConfiguration, train_options: TrainingOptions):
     """ Get torch data loaders for training and validation. The data loaders take a crop of the image,
     transform it into tensor, and normalize it."""
     data_transforms = {
@@ -141,14 +145,15 @@ def get_data_loaders_stablesign(model_config: HiDDenConfiguration,train_options:
         ])
     }
 
-    train_images = datasets.ImageFolder('/home/yh351/code/stable_signature/comp_image_w_encoder_imagenet_final_1000/wm_images', data_transforms['test'])
+    train_images = datasets.ImageFolder(
+        '/home/yh351/code/stable_signature/comp_image_w_encoder_imagenet_final_1000/wm_images', data_transforms['test'])
 
     data_loader = torch.utils.data.DataLoader(train_images, batch_size=train_options.batch_size,
-                                                    shuffle=False, num_workers=4)
+                                              shuffle=False, num_workers=4)
     return data_loader
 
 
-def get_data_loaders_treering(model_config: HiDDenConfiguration,train_options:TrainingOptions):
+def get_data_loaders_treering(model_config: HiDDenConfiguration, train_options: TrainingOptions):
     """ Get torch data loaders for training and validation. The data loaders take a crop of the image,
     transform it into tensor, and normalize it."""
     data_transforms = {
@@ -162,7 +167,7 @@ def get_data_loaders_treering(model_config: HiDDenConfiguration,train_options:Tr
     train_images = datasets.ImageFolder('/home/yh351/code/tree-ring-watermark-main/wm_images', data_transforms['test'])
 
     data_loader = torch.utils.data.DataLoader(train_images, batch_size=train_options.batch_size,
-                                                    shuffle=False, num_workers=4)
+                                              shuffle=False, num_workers=4)
     return data_loader
 
 
@@ -357,11 +362,11 @@ def write_losses(file_name, losses_accu, epoch, duration):
 
 
 def setup_seed(seed):
-     torch.manual_seed(seed)
-     torch.cuda.manual_seed_all(seed)
-     np.random.seed(seed)
-     random.seed(seed)
-     torch.backends.cudnn.deterministic = True
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
 
 
 def transform_image(image, device):
@@ -383,9 +388,9 @@ def transform_image_stablesign(image, device):
 
     cloned_encoded_images = cloned_encoded_images / 255
     data_transforms = transforms.Compose([
-            transforms.Resize((512, 512)),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406],std=[0.229, 0.224, 0.225])
-        ])
+        transforms.Resize((512, 512)),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
     cloned_encoded_images = data_transforms(cloned_encoded_images)
     image = cloned_encoded_images.to(device)
 
@@ -393,4 +398,4 @@ def transform_image_stablesign(image, device):
 
 
 def str2msg(str):
-    return [1 if el=='1' else 0 for el in str]
+    return [1 if el == '1' else 0 for el in str]
