@@ -56,6 +56,7 @@ def train(model: Hidden,
         epoch_start = time.time()
         step = 1
         for data in iter(train_data):
+
             if data_type == 'batch_dict':
                 image = data['image'].to(device)
             elif data_type == 'image_label':
@@ -88,13 +89,22 @@ def train(model: Hidden,
         first_iteration = True
         validation_losses = defaultdict(AverageMeter)
         logging.info('Running validation for epoch {}/{}'.format(epoch, train_options.number_of_epochs))
-        for image, _ in val_data:
-            image = image.to(device)
+        for data in iter(val_data):
+
+            if data_type == 'batch_dict':
+                image = data['image'].to(device)
+            elif data_type == 'image_label':
+                image, _ = data
+                image = image.to(device)
+            else:
+                raise ValueError(f"Unknown data_type: {data_type}")
+
             message = torch.Tensor(np.random.choice([0, 1], (image.shape[0], hidden_config.message_length))).to(device)
             losses, (encoded_images, noised_images, decoded_messages) = model.validate_on_batch([image, message])
             for name, loss in losses.items():
                 validation_losses[name].update(loss)
             if first_iteration:
+                '''
                 if hidden_config.enable_fp16:
                     image = image.float()
                     encoded_images = encoded_images.float()
@@ -102,6 +112,7 @@ def train(model: Hidden,
                                   encoded_images[:images_to_save, :, :, :].cpu(),
                                   epoch,
                                   os.path.join(this_run_folder, 'images'), resize_to=saved_images_size)
+                '''
                 first_iteration = False
 
         utils.log_progress(validation_losses)

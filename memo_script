@@ -1,1 +1,3 @@
 https://chatgpt.com/share/66f5b326-a804-8006-8d44-768baf0eb006
+
+bash scripts/train_hidden.sh to train all 12 target models

@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 EXP = 1
 # Define the targets, ks, and experiments
 if EXP == 1:
-    targets = ['hidden', 'mbrs', 'stega']
+    targets = ['hidden', 'mbrs', 'stega', 'RivaGAN']
     plot_directory = 'plots_1'
     experiments = ['optimization', ]
 elif EXP == 2:
@@ -30,6 +30,8 @@ for target in targets:
         bits = 64
     elif target == 'stega':
         bits = 100
+    elif target == 'RivaGAN':
+        bits = 32
     else:
         raise ValueError(f'Unknown target: {target}')
     for k in ks:

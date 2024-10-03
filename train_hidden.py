@@ -5,6 +5,7 @@ import torch
 import pickle
 
 from pyarrow.dataset import dataset
+from pygments.lexer import default
 
 import utils
 import logging
@@ -24,7 +25,7 @@ def main():
     parent_parser = argparse.ArgumentParser(description='Training of HiDDeN nets')
     subparsers = parent_parser.add_subparsers(dest='command', help='Sub-parser for commands')
     new_run_parser = subparsers.add_parser('new', help='starts a new run')
-    new_run_parser.add_argument('--data-dir', '-d', required=True, type=str,
+    new_run_parser.add_argument('--data-dir', '-d', required=False, type=str, default='data',
                                 help='The directory where the data is stored.')
     new_run_parser.add_argument('--batch-size', '-b', required=True, type=int, help='The batch size.')
     new_run_parser.add_argument('--epochs', '-e', default=300, type=int, help='Number of epochs to run the simulation.')

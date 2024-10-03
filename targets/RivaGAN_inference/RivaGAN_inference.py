@@ -42,7 +42,8 @@ class RivaGAN:
             )
 
             # Convert from [-1, 1] to [0, 255] uint8 in batch
-            images_np = ((images.permute(0, 2, 3, 1).cpu().numpy() + 1) * 127.5).astype(np.uint8)
+            images_np = ((images.permute(0, 2, 3, 1).cpu().numpy() + 1) * 127.5).astype(np.uint8).astype(np.float32)
+            # round to nearest integer
 
             wm_images_np = []
 
@@ -100,7 +101,7 @@ class RivaGAN:
             )
 
             # Convert from [-1, 1] to [0, 255] uint8 in batch
-            images_np = ((images.permute(0, 2, 3, 1).cpu().numpy() + 1) * 127.5).astype(np.uint8)
+            images_np = ((images.permute(0, 2, 3, 1).cpu().numpy() + 1) * 127.5).astype(np.uint8).astype(np.float32)
 
             wm_keys = []
 
