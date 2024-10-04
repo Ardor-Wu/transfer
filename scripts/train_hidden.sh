@@ -1,4 +1,5 @@
 #!/bin/bash
+# run on gpu 2-3
 
 # Function to clean up background jobs
 cleanup() {

@@ -34,6 +34,8 @@ def main():
     parser.add_argument('--normalized', action='store_true',
                         help='Normalize the watermark (set to True when specified)')
     parser.add_argument('--PA', type=str, default='mean', help='PA for non-optimization method')
+    parser.add_argument('--model_type', type=str, default='cnn', help='cnn or resnet')
+    parser.add_argument('--resnet_same_encoder', action='store_true')
     args = parser.parse_args()
 
     device = torch.device('cuda:' + str(args.device)) if torch.cuda.is_available() else torch.device('cpu')
@@ -57,7 +59,7 @@ def main():
     train_type = 'AT'
     data_name = 'DB'
     wm_method = 'hidden'
-    model_type = 'cnn'  # 'resnet'
+    model_type = args.model_type
     white = False
     smooth = False
 
@@ -127,9 +129,14 @@ def main():
                                                 enable_fp16=enable_fp16
                                                 )
         elif model_type == 'resnet':
+            if args.resnet_same_encoder:
+                encoder_blocks = 4
+            else:
+                encoder_blocks = 7
             target_config = HiDDenConfiguration(H=size, W=size,
                                                 message_length=target_length,
-                                                encoder_blocks=7, encoder_channels=64,
+                                                encoder_blocks=encoder_blocks,
+                                                encoder_channels=64,
                                                 decoder_blocks=7, decoder_channels=64,
                                                 use_discriminator=True,
                                                 use_vgg=False,
@@ -149,9 +156,11 @@ def main():
 
     if target == 'hidden':
         if 'DB' in data_name:
-            target_cp_file = f'./target model/{target}_{train_type}/{message}bits_{model_type}_{train_type}.pth'
+            target_cp_file = f'./target model/{target}_{train_type}/{target_length}bits_{model_type}_{train_type}.pth'
         elif 'midjourney' in data_name:
-            target_cp_file = f'./target model/{message}bits_{model_type}_AT_midjourney.pth'
+            target_cp_file = f'./target model/{target_length}bits_{model_type}_AT_midjourney.pth'
+        if args.resnet_same_encoder:
+            target_cp_file = target_cp_file.replace('.pth', '_resnet_same_encoder.pth')
 
     sur_cp_folder = './surrogate model/' + wm_method + '/' + train_type + '/'
 
@@ -164,7 +173,7 @@ def main():
         utils.model_from_checkpoint(model, target_cp)
 
     if target == 'mbrs':
-        model = MBRS(H=size, W=size, message_length=message, device=device)
+        model = MBRS(H=size, W=size, message_length=target_length, device=device)
 
     if target == 'stega':
         model_path = '/scratch/qilong3/transferattack/targets/checkpoints/stegaStamp/stegastamp_pretrained'
@@ -187,7 +196,8 @@ def main():
 
     test_tfattk_hidden(model, sur_model_list, device, target_config, train_options, val_dataset, train_type, model_type,
                        data_name, wm_method, target, smooth, target_length=target_length, num_models=num_models,
-                       fixed_message=fixed_message, optimization=optimization, PA=PA, budget=budget)
+                       fixed_message=fixed_message, optimization=optimization, PA=PA, budget=budget,
+                       resnet_same_encoder=args.resnet_same_encoder)
 
 
 if __name__ == '__main__':

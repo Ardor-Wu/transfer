@@ -78,7 +78,8 @@ def test_tfattk_hidden(
         fixed_message=False,
         optimization=True,
         PA='mean',
-        budget=None
+        budget=None,
+        resnet_same_encoder=False
 ):
     dir_string = (
             'results/' +
@@ -96,6 +97,8 @@ def test_tfattk_hidden(
             dir_string += '_median'
         if budget is not None:
             dir_string += f'_budget_{budget}'
+    if resnet_same_encoder:
+        dir_string += '_resnet_same_encoder'
 
     if not os.path.exists('results'):
         os.makedirs('results')
@@ -142,7 +145,7 @@ def test_tfattk_hidden(
         losses, (encoded_images, attk_images, decoded_messages), num = tfattk_validate_on_batch(
             model, [image, message], model_list, num, train_type, model_type,
             attk_param, pp, wm_method, target, smooth=smooth, fixed_message=fixed_message, optimization=optimization,
-            PA=PA, budget=budget
+            PA=PA, budget=budget, resnet_same_encoder=resnet_same_encoder
         )
 
         for name, loss in losses.items():
@@ -197,7 +200,7 @@ def compute_tdr_avg(decoded_rounded, decoded_rounded_attk, messages, smooth, med
 
 def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, train_type: str, model_type: str,
                              attk_param: float, pp: str, wm_method, target, encode_wm=True, white=False, smooth=False,
-                             fixed_message=False, optimization=True, PA='mean', budget=None):
+                             fixed_message=False, optimization=True, PA='mean', budget=None, resnet_same_encoder=False):
     # model must have encoder and decoder
 
     images, messages = batch
@@ -231,7 +234,7 @@ def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, tra
                                   name='flipratio_batch', train_type=train_type,
                                   model_type=model_type, batch_size=len(model_list), wm_method=wm_method, target=target,
                                   white=white, fixed_message=fixed_message, optimization=optimization, PA=PA,
-                                  budget=budget)
+                                  budget=budget, resnet_same_encoder=resnet_same_encoder)
 
     with torch.no_grad():
         attk_images = encoded_images + noise
@@ -425,7 +428,7 @@ def project(param_data, backup, epsilon):
 def wevade_transfer_batch(all_watermarked_image, target_length, model_list, watermark_length, iteration, lr, r, epsilon,
                           num, name, train_type, model_type, batch_size, wm_method, target, white=False,
                           fixed_message=False, optimization=True, PA='mean'
-                          , budget=None):
+                          , budget=None, resnet_same_encoder=False):
     watermarked_image_cloned = all_watermarked_image.clone()
     criterion = nn.MSELoss(reduction='mean')
     # Construct base directory
@@ -453,6 +456,8 @@ def wevade_transfer_batch(all_watermarked_image, target_length, model_list, wate
             filename += '_mean'
         elif PA == 'median':
             filename += '_median'
+    if resnet_same_encoder:
+        filename += '_resnet_same_encoder'
 
     filename += '.pth'
 

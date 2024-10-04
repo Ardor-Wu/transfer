@@ -103,7 +103,8 @@ def main():
         noise_config = args.noise if args.noise is not None else []
         hidden_config = HiDDenConfiguration(H=args.size, W=args.size,
                                             message_length=args.message,
-                                            encoder_blocks=4, encoder_channels=64,
+                                            encoder_blocks=7, # was incorrect to be 4
+                                            encoder_channels=64,
                                             decoder_blocks=7, decoder_channels=64,
                                             use_discriminator=True,
                                             use_vgg=False,
@@ -155,4 +156,5 @@ def main():
 
 
 if __name__ == '__main__':
+    utils.setup_seed(42)
     main()
