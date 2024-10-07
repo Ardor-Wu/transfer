@@ -1,5 +1,5 @@
 #!/bin/bash
-# run on gpu 3 in parallel
+# Run on GPUs 0-1 in parallel
 
 # Function to clean up background jobs
 cleanup() {
@@ -15,7 +15,6 @@ trap 'cleanup' SIGINT
 model_types=("resnet")
 training_sets=("DB")
 ms=(20 30 64)
-gpu=3  # Run on GPU 3 only
 
 # Array to hold commands
 declare -a cmds
@@ -28,11 +27,13 @@ for model_type in "${model_types[@]}"; do
             name="${model_type}_${m}_${training_set}"
             # Create the logs directory path
             log_dir="logs/$name"
-            # Command to create log directory and run the python script, redirecting all output
-            cmd="mkdir -p \"$log_dir\" && python train_hidden.py new --epochs 400 --batch-size 12 --name \"$name\" --model_type \"$model_type\" --message \"$m\" --dataset \"$training_set\" --gpu \"$gpu\" > \"$log_dir/output.log\" 2>&1"
-
-            # Append command to the cmds array
-            cmds+=("$cmd")
+            # Determine which GPU to use
+            if [ "$m" -eq 64 ]; then
+                gpu=1
+            else
+                gpu=0
+            fi
+            cmds+=("mkdir -p \"$log_dir\" && python train_hidden.py new --epochs 400 --batch-size 12 --name \"$name\" --model_type \"$model_type\" --message \"$m\" --dataset \"$training_set\" --gpu \"$gpu\" > \"$log_dir/output.log\" 2>&1")
         done
     done
 done
@@ -40,13 +41,13 @@ done
 # Function to execute commands in parallel
 run_commands_parallel() {
     for cmd in "$@"; do
-        echo "Running on GPU ${gpu}: $cmd"
+        echo "Running: $cmd"
         eval "$cmd" &
     done
     wait
 }
 
-# Run commands in parallel
+# Run all commands in parallel
 run_commands_parallel "${cmds[@]}"
 
 echo "All tasks have been completed."
