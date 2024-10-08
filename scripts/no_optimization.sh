@@ -5,11 +5,11 @@ nums=(1 2 5 10 20 30 40 50)
 targets=("hidden")
 pas=("mean" "median")
 lengths=(20 30 64)
-types=("cnn" "resnet")
+types=("cnn")
 normalized_options=("" "--normalized")
 
-# Set device to GPU 3
-device=3
+# Set device to GPU 1
+device=1
 
 # Function to handle Ctrl+C and kill all child processes
 cleanup() {

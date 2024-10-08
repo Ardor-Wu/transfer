@@ -15,7 +15,7 @@ class MBRS():
         with_diffusion = False
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.network = Network(H, W, message_length, noise_layers, self.device, batch_size, lr, with_diffusion)
-        EC_path = "/scratch/qilong3/transferattack/target model/mbrs_AT/64bits_cnn_AT.pth"
+        EC_path = "/scratch/qilong3/transferattack/target_model/mbrs_AT/64bits_cnn_AT.pth"
         self.network.load_model_ed(EC_path)
         self.encoder = self.network.encoder_decoder.module.encoder
         self.decoder = self.network.encoder_decoder.module.decoder

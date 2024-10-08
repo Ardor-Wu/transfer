@@ -24,7 +24,7 @@ base_dir = '/scratch/qilong3/transferattack/results'
 # Loop over targets, ks, and experiments to read and parse the log files
 for target in targets:
     if target == 'hidden':
-        bits_list = [20, 30, 64]
+        bits_list = [20, 30]
         source_bits = 30  # Assuming source bits is 30
         model_types = ['cnn', 'resnet']
     elif target == 'mbrs':
@@ -67,9 +67,7 @@ for target in targets:
                                     metric_name = match.group(1).strip()
                                     value = float(match.group(2))
                                     # Sanitize the metric name to be used as a DataFrame column
-                                    metric_name = metric_name.replace(' ', '_').replace('-', '_').replace('(',
-                                                                                                          '').replace(
-                                        ')', '')
+                                    metric_name = metric_name.replace(' ', '_').replace('-', '_').replace('(', '').replace(')', '')
                                     metrics[metric_name] = value
                             data.append(metrics)
                     else:
@@ -121,6 +119,16 @@ for metric in metric_columns:
                             ylabel = 'Evasion Rate'
                             title = f'Evasion Rate vs Number of Models (k)\n(bits={bits}, model={model_type})'
                             filename = f'Evasion_Rate_vs_k_bits{bits}_model{model_type}.png'
+                        elif metric == 'auroc':
+                            y_values = subset[metric]
+                            ylabel = 'AUROC (Attacked)'
+                            title = f'AUROC (Attacked) vs Number of Models (k)\n(bits={bits}, model={model_type})'
+                            filename = f'AUROC_Attacked_vs_k_bits{bits}_model{model_type}.png'
+                        elif metric == 'auroc_attk':
+                            y_values = subset[metric]
+                            ylabel = 'AUROC'
+                            title = f'AUROC vs Number of Models (k)\n(bits={bits}, model={model_type})'
+                            filename = f'AUROC_vs_k_bits{bits}_model{model_type}.png'
                         else:
                             y_values = subset[metric]
                             ylabel = metric.replace('_', ' ')
@@ -161,8 +169,8 @@ for bits in bits_list:
                     plt.plot(x_values, y_values, marker='o', label=f'{target}_{experiment}')
         if data_plotted:
             plt.xlabel('Evasion Rate')
-            plt.ylabel('Average $L_\\infty$ Perturbation')
-            plt.title(f'Average $L_\\infty$ Perturbation vs Evasion Rate\n(bits={bits}, model={model_type})')
+            plt.ylabel('Average $L_\infty$ Perturbation')
+            plt.title(f'Average $L_\infty$ Perturbation vs Evasion Rate\n(bits={bits}, model={model_type})')
             plt.legend()
             plt.grid(True)
             plt.tight_layout()

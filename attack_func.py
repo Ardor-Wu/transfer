@@ -1,6 +1,5 @@
 import os
-import time
-from statistics import median
+from torchmetrics import AUROC
 
 import torch
 import numpy as np
@@ -11,30 +10,12 @@ import random
 import math
 import torchvision
 
-from options import *
-from model.hidden import Hidden
-# from model.hidden_finetune import Hidden_ft
 from average_meter import AverageMeter
-from noise_layers.identity import Identity
-# import matplotlib.pyplot as plt
+
 from torch import nn
 from tqdm import tqdm
-# from skimage.metrics import structural_similarity as ssim
 from torchmetrics.image import StructuralSimilarityIndexMeasure
-# from torchmetrics.image import PeakSignalNoiseRatio
-from noise_layers.identity import Identity
-from noise_layers.diff_jpeg import DiffJPEG
-from noise_layers.gaussian import Gaussian
-from noise_layers.crop import Crop
-from noise_layers.brightness import Brightness
-from noise_layers.gaussian_blur import GaussianBlur
-# import imgaug.augmenters as iaa
 from pytorch_msssim import ssim
-import imageio
-from PIL import Image
-import torchvision.transforms as transforms
-
-# from targets.MBRS.MBRS_repo.test import message
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -70,6 +51,7 @@ def test_tfattk_hidden(
         wm_method,
         target,
         smooth,
+        encode_wm=True,
         attk_param=None,
         pp=None,
         watermark_length=30,
@@ -114,6 +96,16 @@ def test_tfattk_hidden(
     logging.info('Running validation for transfer attack')
     num = 0
 
+    # Initialize lists to store predictions and labels for AUROC
+    all_decoded = []
+    all_decoded_attk = []
+    all_true = []
+
+    # Initialize AUROC metric (multilabel classification)
+    auroc_metric = AUROC(task='binary', num_labels=hidden_config.message_length).to(device)
+
+    all_decoded_ori = []
+
     for data in tqdm(iter(val_data)):
         num += 1
         if data_type == 'batch_dict':
@@ -133,27 +125,111 @@ def test_tfattk_hidden(
             message = torch.tensor(message_bits, dtype=torch.float).to(device)
             batch_size = image.shape[0]  # Assuming image is a tensor with shape [batch_size, ...]
             # Repeat the message and flatten
-            message = message.repeat(batch_size)
-            message = message.view(batch_size, -1)
+            message = message.repeat(batch_size, 1)
         else:
             if hidden_config.message_length == 30:
                 message_path = './message/' + str(hidden_config.message_length) + 'bits_message_' + str(num) + '.pth'
-                message = torch.load(message_path).to(device)
+                message = torch.load(message_path, map_location=device).to(device)
             else:
                 message = torch.randint(0, 2, (image.size(0), hidden_config.message_length)).float().to(device)
 
-        losses, (encoded_images, attk_images, decoded_messages), num = tfattk_validate_on_batch(
-            model, [image, message], model_list, num, train_type, model_type,
-            attk_param, pp, wm_method, target, smooth=smooth, fixed_message=fixed_message, optimization=optimization,
-            PA=PA, budget=budget, resnet_same_encoder=resnet_same_encoder
+        # Capture the additional returned variables
+        losses, (
+            encoded_images, attk_images, decoded_messages, decoded_messages_attk_var
+        ), _ = tfattk_validate_on_batch(
+            model,
+            [image, message],
+            model_list,
+            num,
+            train_type,
+            model_type,
+            attk_param,
+            pp,
+            wm_method,
+            target,
+            smooth=smooth,
+            fixed_message=fixed_message,
+            optimization=optimization,
+            PA=PA,
+            budget=budget,
+            resnet_same_encoder=resnet_same_encoder
         )
+
+        decoded_original = decode_messages_unwatermarked(model, image)
+        all_decoded_ori.append(decoded_original.detach().cpu())
 
         for name, loss in losses.items():
             validation_losses[name].update(loss)
 
+        # Collect decoded messages and true messages for AUROC
+        all_decoded.append(decoded_messages.detach().cpu())
+        all_true.append(message.detach().cpu())
+
+        if encode_wm:
+            if smooth:
+                if decoded_messages_attk_var is not None:
+                    decoded_attk = decoded_messages_attk_var.detach().cpu()
+                else:
+                    decoded_attk = None
+            else:
+                if decoded_messages_attk_var is not None:
+                    decoded_attk = decoded_messages_attk_var.detach().cpu()
+                else:
+                    decoded_attk = None
+            if decoded_attk is not None:
+                all_decoded_attk.append(decoded_attk)
+
         if max_batches is not None and num >= max_batches:
             break
 
+    if len(all_decoded_ori) > 0:
+        all_decoded_ori = torch.cat(all_decoded_ori, dim=0).view(-1, hidden_config.message_length)
+    else:
+        all_decoded_ori = None
+
+    # Concatenate all collected data
+    all_decoded = torch.cat(all_decoded, dim=0).view(-1, hidden_config.message_length)
+    all_true = torch.cat(all_true, dim=0).view(-1, hidden_config.message_length)
+
+    if len(all_decoded_attk) > 0:
+        all_decoded_attk = torch.cat(all_decoded_attk, dim=0).view(-1, hidden_config.message_length)
+    else:
+        all_decoded_attk = None
+
+    # round all_decoded and all_decoded_attk to 0 and 1 in float
+    all_decoded = torch.round(all_decoded)
+    if all_decoded_attk is not None:
+        all_decoded_attk = torch.round(all_decoded_attk)
+
+    ori_acc_image_wise = 1 - torch.sum(torch.abs(all_decoded_ori - all_true), dim=1) / hidden_config.message_length
+    acc_image_wise = 1 - torch.sum(torch.abs(all_decoded - all_true), dim=1) / hidden_config.message_length
+    if all_decoded_attk is not None:
+        acc_image_wise_attk = 1 - torch.sum(torch.abs(all_decoded_attk - all_true),
+                                            dim=1) / hidden_config.message_length
+    # 0 for ori and 1 for watermarked (attk and not attacked)
+    labels_ori = torch.zeros_like(ori_acc_image_wise)
+    labels_wm = torch.ones_like(acc_image_wise)
+    if all_decoded_attk is not None:
+        labels_attk = torch.ones_like(acc_image_wise_attk)
+    labels_ori_wm = torch.cat([labels_ori, labels_wm], dim=0)
+    if all_decoded_attk is not None:
+        labels_ori_wm_attk = torch.cat([labels_ori, labels_wm, labels_attk], dim=0)
+
+    preds_ori_wm = torch.cat([ori_acc_image_wise, acc_image_wise], dim=0)
+    preds_ori_wm_attk = torch.cat([ori_acc_image_wise, acc_image_wise_attk], dim=0)
+
+    auroc_unattacked= auroc_metric(preds_ori_wm, labels_ori_wm)
+    auroc = auroc_metric(preds_ori_wm_attk, labels_ori_wm_attk)
+
+    # Compute AUROC
+
+    # Add AUROC to the validation losses
+    validation_losses['auroc_unattacked'] = AverageMeter()
+    validation_losses['auroc'] = AverageMeter()
+    validation_losses['auroc_unattacked'].update(auroc_unattacked)
+    validation_losses['auroc'].update(auroc)
+
+    # Log all metrics including AUROC
     utils.log_progress(validation_losses)
 
 
@@ -198,43 +274,86 @@ def compute_tdr_avg(decoded_rounded, decoded_rounded_attk, messages, smooth, med
     return tdr_avg_1, tdr_avg_2, tdr_avg_attk_1, tdr_avg_attk_2
 
 
-def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, train_type: str, model_type: str,
-                             attk_param: float, pp: str, wm_method, target, encode_wm=True, white=False, smooth=False,
-                             fixed_message=False, optimization=True, PA='mean', budget=None, resnet_same_encoder=False):
-    # model must have encoder and decoder
+def decode_messages_unwatermarked(
+        model,
+        images,
+) -> torch.Tensor:
+    """
+    Decode messages from unwatermarked images and return rounded binary messages.
 
+    Args:
+        model (nn.Module): The watermarking model with encoder and decoder.
+        unwatermarked_loader (DataLoader): DataLoader providing unwatermarked images.
+        device (torch.device): Device to perform computations on.
+
+    Returns:
+        torch.Tensor: Tensor of decoded messages rounded to 0 and 1 bits.
+    """
+    model.decoder.eval()
+
+    decoded_messages = model.decoder(images)
+    decoded_rounded = torch.clamp(torch.round(decoded_messages), 0, 1).float()
+
+    return decoded_rounded
+
+
+def tfattk_validate_on_batch(
+        model,
+        batch: list,
+        model_list: list,
+        num: int,
+        train_type: str,
+        model_type: str,
+        attk_param: float,
+        pp: str,
+        wm_method,
+        target,
+        encode_wm=True,
+        white=False,
+        smooth=False,
+        fixed_message=False,
+        optimization=True,
+        PA='mean',
+        budget=None,
+        resnet_same_encoder=False
+):
+    # Unpack the batch
     images, messages = batch
-
     batch_size = images.shape[0]
 
-    # self.encoder_decoder.eval()
-    ###
     if encode_wm:
         model.encoder.eval()
         model.decoder.eval()
-        ###
-        # model.discriminator.eval()
         with torch.no_grad():
-            # d_target_label_cover = torch.full((batch_size, 1), model.cover_label, device=model.device)
-            # d_target_label_encoded = torch.full((batch_size, 1), model.encoded_label, device=model.device)
-            # g_target_label_encoded = torch.full((batch_size, 1), model.cover_label, device=model.device)
-
-            # d_on_cover = model.discriminator(images)
-            # d_loss_on_cover = model.bce_with_logits_loss(d_on_cover, d_target_label_cover.float())
-
             encoded_images = model.encoder(images, messages)
     else:
         if model is not None:
             model.eval()
         encoded_images = images
 
-    noise = wevade_transfer_batch(encoded_images.clone(), messages.size(1), model_list,
-                                  watermark_length=30, iteration=5000,
-                                  lr=2, r=0.5, epsilon=0.2, num=num,
-                                  name='flipratio_batch', train_type=train_type,
-                                  model_type=model_type, batch_size=len(model_list), wm_method=wm_method, target=target,
-                                  white=white, fixed_message=fixed_message, optimization=optimization, PA=PA,
-                                  budget=budget, resnet_same_encoder=resnet_same_encoder)
+    noise = wevade_transfer_batch(
+        encoded_images.clone(),
+        messages.size(1),
+        model_list,
+        watermark_length=30,
+        iteration=5000,
+        lr=2,
+        r=0.5,
+        epsilon=0.2,
+        num=num,
+        name='flipratio_batch',
+        train_type=train_type,
+        model_type=model_type,
+        batch_size=len(model_list),
+        wm_method=wm_method,
+        target=target,
+        white=white,
+        fixed_message=fixed_message,
+        optimization=optimization,
+        PA=PA,
+        budget=budget,
+        resnet_same_encoder=resnet_same_encoder
+    )
 
     with torch.no_grad():
         attk_images = encoded_images + noise
@@ -264,32 +383,6 @@ def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, tra
                 decoded_messages_attk_all = torch.stack(decoded_messages_attk_all)
             else:
                 decoded_messages_attk = model.decoder(attk_images)
-
-            # d_on_encoded = model.discriminator(encoded_images)
-            # d_loss_on_encoded = model.bce_with_logits_loss(d_on_encoded, d_target_label_encoded.float())
-
-            # d_on_encoded_for_enc = model.discriminator(encoded_images)
-            # g_loss_adv = model.bce_with_logits_loss(d_on_encoded_for_enc, g_target_label_encoded.float())
-
-            # d_on_attk = model.discriminator(attk_images)
-            # d_loss_on_attk = model.bce_with_logits_loss(d_on_attk, d_target_label_encoded.float())
-
-            # d_on_attk_for_enc = model.discriminator(attk_images)
-            # g_loss_adv_attk = model.bce_with_logits_loss(d_on_attk_for_enc, g_target_label_encoded.float())
-            '''
-            if model.vgg_loss is None:
-                g_loss_enc = model.mse_loss(encoded_images, images)
-                g_loss_enc_attk = model.mse_loss(attk_images, images)
-            else:
-                vgg_on_cov = model.vgg_loss(images)
-                vgg_on_enc = model.vgg_loss(encoded_images)
-                vgg_on_enc_attk = model.vgg_loss(attk_images)
-                g_loss_enc = model.mse_loss(vgg_on_cov, vgg_on_enc)
-                g_loss_enc_attk = model.mse_loss(vgg_on_cov, vgg_on_enc_attk)
-    
-            g_loss_dec = model.mse_loss(decoded_messages, messages)
-            g_loss_dec_attk = model.mse_loss(decoded_messages_attk, messages)
-            '''
         else:
             if model is not None:
                 decoded_messages = model(encoded_images_tdr) + 0.5
@@ -297,19 +390,24 @@ def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, tra
 
     if model is not None:
         decoded_rounded = decoded_messages.detach().cpu().numpy().round().clip(0, 1)
-        if smooth:
-            decoded_rounded_attk_all = decoded_messages_attk_all.detach().cpu().numpy().round().clip(0, 1)
-        else:
-            decoded_rounded_attk = decoded_messages_attk.detach().cpu().numpy().round().clip(0, 1)
+        if encode_wm:
+            if smooth:
+                decoded_rounded_attk_all = decoded_messages_attk_all.detach().cpu().numpy().round().clip(0, 1)
+            else:
+                decoded_rounded_attk = decoded_messages_attk.detach().cpu().numpy().round().clip(0, 1)
         bitwise_avg_err = np.sum(np.abs(decoded_rounded - messages.detach().cpu().numpy())) / (
                 batch_size * messages.shape[1])
-        if smooth:
+        if encode_wm and smooth:
             messages_np = messages.detach().cpu().numpy()
             messages_expanded = messages_np[:, None, :]
             bitwise_errors = np.abs(decoded_rounded_attk_all - messages_expanded)
             bitwise_error_sums = np.sum(bitwise_errors, axis=2)
             median_bitwise_errors = np.median(bitwise_error_sums, axis=1)
             bitwise_avg_err_attk = np.mean(median_bitwise_errors) / messages.shape[1]
+        elif encode_wm:
+            bitwise_avg_err_attk = np.sum(np.abs(decoded_rounded_attk - messages.detach().cpu().numpy())) / (
+                    batch_size * messages.shape[1])
+            median_bitwise_errors = None
         else:
             bitwise_avg_err_attk = np.sum(np.abs(decoded_rounded_attk - messages.detach().cpu().numpy())) / (
                     batch_size * messages.shape[1])
@@ -317,9 +415,9 @@ def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, tra
 
         tdr_avg_1, tdr_avg_2, tdr_avg_attk_1, tdr_avg_attk_2 = compute_tdr_avg(
             decoded_rounded,
-            decoded_rounded_attk,
+            decoded_rounded_attk_all if encode_wm and smooth else decoded_rounded_attk,
             messages,
-            smooth,
+            encode_wm and smooth,
             median_bitwise_errors
         )
 
@@ -331,33 +429,19 @@ def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, tra
     ssim_value = [0 if x == -math.inf else x for x in ssim_value]
     ssim_value = np.array(ssim_value)
     ssim_value[np.isnan(ssim_value)] = 0
-    # print(np.sum(np.abs(decoded_rounded_attk - decoded_rounded)) / (
-    #         batch_size * messages.shape[1]))
-
-    # print(np.sum(np.abs(decoded_rounded_attk - messages.detach().cpu().numpy()), axis=1) / (
-    #         messages.shape[1]))
 
     if encode_wm:
         losses = {
-            # 'encoder_mse         ': g_loss_enc.item(),
-            # 'encoder_mse_attk    ': g_loss_enc_attk.item(),
             'noise (L-infinity)  ': torch.mean(
                 torch.norm((encoded_images - attk_images).reshape(encoded_images.size(0), -1), p=float('inf'),
                            dim=1)).item(),
             'noise (L-2)         ': torch.mean(
                 torch.norm((encoded_images - attk_images).reshape(encoded_images.size(0), -1), p=2, dim=1)).item(),
-            # 'dec_mse             ': g_loss_dec.item(),
-            # 'dec_mse_attk        ': g_loss_dec_attk.item(),
             'bitwise-acc         ': 1 - bitwise_avg_err,
             'bitwise-acc_attk    ': 1 - bitwise_avg_err_attk,
             'tdr                 ': tdr_avg_1 + tdr_avg_2,
             'tdr_attk            ': tdr_avg_attk_1 + tdr_avg_attk_2,
             'ssim                ': np.mean(ssim_value),
-            # 'adversarial_bce     ': g_loss_adv.item(),
-            # 'adversarial_bce_attk': g_loss_adv_attk.item(),
-            # 'discr_cover_bce     ': d_loss_on_cover.item(),
-            # 'discr_encod_bce     ': d_loss_on_encoded.item(),
-            # 'discr_attk_bce      ': d_loss_on_attk.item()
         }
     else:
         if model is not None:
@@ -390,9 +474,32 @@ def tfattk_validate_on_batch(model, batch: list, model_list: list, num: int, tra
                     torch.norm((encoded_images - attk_images).view(encoded_images.size(0), -1), p=2, dim=1)).item(),
                 'ssim                ': np.mean(ssim_value),
             }
-            return losses, num
-    # print(losses)
-    return losses, (encoded_images, attk_images, decoded_messages), num
+            return losses, (
+                encoded_images, attk_images, decoded_messages, None), num  # No attk messages when encode_wm=False
+
+    # Return losses and the necessary decoded messages
+    if encode_wm:
+        if smooth:
+            return losses, (
+                encoded_images,
+                attk_images,
+                decoded_messages,
+                decoded_messages_attk_all
+            ), num
+        else:
+            return losses, (
+                encoded_images,
+                attk_images,
+                decoded_messages,
+                decoded_messages_attk
+            ), num
+    else:
+        return losses, (
+            encoded_images,
+            attk_images,
+            decoded_messages,
+            None
+        ), num
 
 
 def normalize_image(image):

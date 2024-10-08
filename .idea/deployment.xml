@@ -1,15 +1,29 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="qilong3@madison.ece.illinois.edu:22 (2)" remoteFilesAllowedToDisappearOnAutoupload="false">
+  <component name="PublishConfigData" autoUpload="Always" serverName="transfer" remoteFilesAllowedToDisappearOnAutoupload="false">
     <serverData>
-      <paths name="qilong3@madison.ece.illinois.edu:22">
+      <paths name="madison">
         <serverdata>
           <mappings>
             <mapping deploy="/scratch/qilong3/transferattack" local="$PROJECT_DIR$" />
           </mappings>
         </serverdata>
       </paths>
+      <paths name="qilong3@madison.ece.illinois.edu:22">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/scratch/qilong3/transfer" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
       <paths name="qilong3@madison.ece.illinois.edu:22 (2)">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/scratch/qilong3/transferattack" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="toronto">
         <serverdata>
           <mappings>
             <mapping deploy="/scratch/qilong3/transferattack" local="$PROJECT_DIR$" />

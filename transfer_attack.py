@@ -156,13 +156,13 @@ def main():
 
     if target == 'hidden':
         if 'DB' in data_name:
-            target_cp_file = f'./target model/{target}_{train_type}/{target_length}bits_{model_type}_{train_type}.pth'
+            target_cp_file = f'/scratch/qilong3/transferattack/target_model/{target}_{train_type}/{target_length}bits_{model_type}_{train_type}.pth'
         elif 'midjourney' in data_name:
-            target_cp_file = f'./target model/{target_length}bits_{model_type}_AT_midjourney.pth'
+            target_cp_file = f'/scratch/qilong3/transferattack/target_model/{target_length}bits_{model_type}_AT_midjourney.pth'
         if args.resnet_same_encoder:
             target_cp_file = target_cp_file.replace('.pth', '_resnet_same_encoder.pth')
 
-    sur_cp_folder = './surrogate model/' + wm_method + '/' + train_type + '/'
+    sur_cp_folder = '/scratch/qilong3/transferattack/surrogate_model/' + wm_method + '/' + train_type + '/'
 
     sur_cp_list = []
     for idx in range(num_models):

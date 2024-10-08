@@ -50,6 +50,8 @@ def main():
     new_run_parser.add_argument('--dataset', default='DB', type=str)
     new_run_parser.add_argument('--gpu', default=0, type=int)
 
+    new_run_parser.add_argument('--encoder_loss', default=0.7, type=float)
+
     new_run_parser.set_defaults(tensorboard=False)
     new_run_parser.set_defaults(enable_fp16=False)
 
@@ -110,7 +112,7 @@ def main():
                                             use_vgg=False,
                                             discriminator_blocks=3, discriminator_channels=64,
                                             decoder_loss=1,
-                                            encoder_loss=0.7,
+                                            encoder_loss=args.encoder_loss,
                                             adversarial_loss=1e-3,
                                             enable_fp16=args.enable_fp16
                                             )
