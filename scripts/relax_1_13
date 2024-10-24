@@ -1,0 +1,57 @@
+#!/bin/bash
+# for exp 1
+# Run on GPUs 0, 2, 3
+
+# Function to clean up background jobs
+cleanup() {
+    echo "Interrupt received. Killing background processes..."
+    kill -- -$$
+    exit 1
+}
+
+# Set trap to catch SIGINT
+trap 'cleanup' SIGINT
+
+# Arrays of parameters
+nums=(1 2 5 10 20 30 40 50)
+targets=("RivaGAN" "mbrs" "hidden" "stega")
+gpus=(1 3)  # GPUs to use
+max_parallel_jobs=2  # Maximum number of parallel jobs
+
+# Set target lengths for each target
+declare -A target_lengths=(
+    ["RivaGAN"]=32
+    ["mbrs"]=64
+    ["hidden"]=30
+    ["stega"]=100
+)
+
+
+
+# Function to wait for available job slots
+wait_for_jobs() {
+    while (( $(jobs -p | wc -l) >= max_parallel_jobs )); do
+        sleep 1
+    done
+}
+
+# Keep track of the task index for GPU assignment
+task_index=0
+
+# Loop over targets and nums to create tasks
+for target in "${targets[@]}"; do
+    target_length="${target_lengths[$target]}"
+    for n in "${nums[@]}"; do
+        wait_for_jobs  # Ensure we don't exceed max_parallel_jobs
+        gpu_id=${gpus[$((task_index % ${#gpus[@]}))]}  # Assign GPU in round-robin
+        cmd="python transfer_attack.py --num_models $n --target $target --target_length $target_length --device $gpu_id"
+        echo "Running on GPU $gpu_id: $cmd"
+        eval "$cmd" &
+        task_index=$((task_index + 1))
+    done
+done
+
+# Wait for all background processes to finish
+wait
+
+echo "All tasks have been completed."

@@ -1,4 +1,5 @@
 import os
+
 from torchmetrics import AUROC
 
 import torch
@@ -61,15 +62,22 @@ def test_tfattk_hidden(
         optimization=True,
         PA='mean',
         budget=None,
-        resnet_same_encoder=False
+        resnet_same_encoder=False,
+        normalization=None,
+        debug=False,
+        model_index=1,
+        r=0.25
 ):
     dir_string = (
-            'results/' +
+            'results/' + str(r) + '/' +
             wm_method + '_to_' + target + '_' + model_type + '_' +
             str(watermark_length) + '_to_' + str(target_length) + 'bits' + train_type + '_' + str(num_models) + 'models'
     )
     if fixed_message:
         dir_string += '_fixed_message'
+
+    if 'midjourney' in data_name:
+        dir_string += '_midjourney'
 
     if not optimization:
         dir_string += '_no_optimization'
@@ -79,11 +87,11 @@ def test_tfattk_hidden(
             dir_string += '_median'
         if budget is not None:
             dir_string += f'_budget_{budget}'
+            dir_string += f'_{normalization}'
+        if not model_index == 1 and num_models == 1:
+            dir_string += f'_model_{model_index}'
     if resnet_same_encoder:
         dir_string += '_resnet_same_encoder'
-
-    if not os.path.exists('results'):
-        os.makedirs('results')
 
     # Configure logging to write messages with level INFO or higher to a file
     logging.basicConfig(filename=dir_string + '.log', filemode='w', level=logging.INFO)
@@ -102,7 +110,7 @@ def test_tfattk_hidden(
     all_true = []
 
     # Initialize AUROC metric (multilabel classification)
-    auroc_metric = AUROC(task='binary', num_labels=hidden_config.message_length).to(device)
+    auroc_metric = AUROC(task='binary').to(device)
 
     all_decoded_ori = []
 
@@ -152,7 +160,10 @@ def test_tfattk_hidden(
             optimization=optimization,
             PA=PA,
             budget=budget,
-            resnet_same_encoder=resnet_same_encoder
+            resnet_same_encoder=resnet_same_encoder,
+            normalization=normalization,
+            data_name=data_name,
+            r=r
         )
 
         decoded_original = decode_messages_unwatermarked(model, image)
@@ -199,27 +210,37 @@ def test_tfattk_hidden(
     # round all_decoded and all_decoded_attk to 0 and 1 in float
     all_decoded = torch.round(all_decoded)
     if all_decoded_attk is not None:
-        all_decoded_attk = torch.round(all_decoded_attk)
+        all_decoded_attk = torch.clamp(torch.round(all_decoded_attk), 0, 1).float()
 
     ori_acc_image_wise = 1 - torch.sum(torch.abs(all_decoded_ori - all_true), dim=1) / hidden_config.message_length
     acc_image_wise = 1 - torch.sum(torch.abs(all_decoded - all_true), dim=1) / hidden_config.message_length
     if all_decoded_attk is not None:
         acc_image_wise_attk = 1 - torch.sum(torch.abs(all_decoded_attk - all_true),
                                             dim=1) / hidden_config.message_length
+
     # 0 for ori and 1 for watermarked (attk and not attacked)
     labels_ori = torch.zeros_like(ori_acc_image_wise)
     labels_wm = torch.ones_like(acc_image_wise)
-    if all_decoded_attk is not None:
-        labels_attk = torch.ones_like(acc_image_wise_attk)
+    # if all_decoded_attk is not None:
+    #    labels_attk = torch.ones_like(acc_image_wise_attk)
     labels_ori_wm = torch.cat([labels_ori, labels_wm], dim=0)
-    if all_decoded_attk is not None:
-        labels_ori_wm_attk = torch.cat([labels_ori, labels_wm, labels_attk], dim=0)
+    # if all_decoded_attk is not None:
+    #    labels_ori_wm_attk = torch.cat([labels_ori, labels_wm], dim=0)
 
     preds_ori_wm = torch.cat([ori_acc_image_wise, acc_image_wise], dim=0)
     preds_ori_wm_attk = torch.cat([ori_acc_image_wise, acc_image_wise_attk], dim=0)
 
-    auroc_unattacked= auroc_metric(preds_ori_wm, labels_ori_wm)
-    auroc = auroc_metric(preds_ori_wm_attk, labels_ori_wm_attk)
+    auroc_unattacked = auroc_metric(preds_ori_wm, labels_ori_wm)
+    auroc = auroc_metric(preds_ori_wm_attk, labels_ori_wm)
+
+    # when debug is True, plot preds_ori_wm_attk and labels_ori_wm
+
+    if debug:
+        import matplotlib.pyplot as plt
+        plt.plot(preds_ori_wm_attk, label=f'bitwise_acc_auroc={auroc}')
+        plt.plot(labels_ori_wm, label='labels')
+        plt.legend()
+        plt.show()
 
     # Compute AUROC
 
@@ -315,7 +336,10 @@ def tfattk_validate_on_batch(
         optimization=True,
         PA='mean',
         budget=None,
-        resnet_same_encoder=False
+        resnet_same_encoder=False,
+        normalization='clamp',
+        data_name='DB',
+        r=0.25
 ):
     # Unpack the batch
     images, messages = batch
@@ -331,6 +355,16 @@ def tfattk_validate_on_batch(
             model.eval()
         encoded_images = images
 
+    encoded_images = encoded_images.clamp(-1, 1)  # should add this
+    # average l_inf added by the target model
+
+    # l_inf = torch.max(torch.abs(encoded_images - images), dim=1, keepdim=True)[0].max(dim=2, keepdim=True)[0].max(dim=3,
+    #                                                                                                              keepdim=True)[
+    #    0].reshape(-1).mean()
+    # 1.7030 for 64 bits for the first 100 images
+    # 0.8690 for 20 bits
+    # 0.7737 for 30 bits
+
     noise = wevade_transfer_batch(
         encoded_images.clone(),
         messages.size(1),
@@ -338,7 +372,7 @@ def tfattk_validate_on_batch(
         watermark_length=30,
         iteration=5000,
         lr=2,
-        r=0.5,
+        r=r,
         epsilon=0.2,
         num=num,
         name='flipratio_batch',
@@ -352,11 +386,24 @@ def tfattk_validate_on_batch(
         optimization=optimization,
         PA=PA,
         budget=budget,
-        resnet_same_encoder=resnet_same_encoder
+        resnet_same_encoder=resnet_same_encoder,
+        data_name=data_name
     )
 
     with torch.no_grad():
         attk_images = encoded_images + noise
+        if budget:
+            attk_images = attk_images.clamp(-1, 1)
+            real_noise = attk_images - encoded_images
+            l_inf = torch.norm(real_noise, p=float('inf'), dim=(1, 2, 3))
+            l_inf = l_inf.reshape(-1, 1, 1, 1)
+            if normalization == 'scale':
+                attk_images = encoded_images + real_noise / l_inf * budget
+            elif normalization == 'clamp':
+                real_noise = torch.clamp(real_noise, -budget, budget)
+                attk_images = encoded_images + real_noise
+            else:
+                raise ValueError(f"Unsupported normalization: {normalization}")
 
         if encode_wm:
             attk_images = utils.transform_image(attk_images, model.device)
@@ -535,11 +582,13 @@ def project(param_data, backup, epsilon):
 def wevade_transfer_batch(all_watermarked_image, target_length, model_list, watermark_length, iteration, lr, r, epsilon,
                           num, name, train_type, model_type, batch_size, wm_method, target, white=False,
                           fixed_message=False, optimization=True, PA='mean'
-                          , budget=None, resnet_same_encoder=False):
+                          , budget=None, resnet_same_encoder=False, data_name='DB'):
     watermarked_image_cloned = all_watermarked_image.clone()
     criterion = nn.MSELoss(reduction='mean')
+
+    dataset_name = 'DB' if 'DB' in data_name else 'midjourney'
     # Construct base directory
-    base_dir = f'./wevade_perturb_{wm_method}_to_{target}_{model_type}_{watermark_length}_to_{target_length}bits/{train_type}'
+    base_dir = f'./wevade_perturb_{wm_method}_to_{target}_{model_type}_{watermark_length}_to_{target_length}bits/{train_type}/{dataset_name}/{r}'
 
     # Ensure the directory exists
     if not os.path.exists(base_dir):
@@ -590,10 +639,10 @@ def wevade_transfer_batch(all_watermarked_image, target_length, model_list, wate
             all_perturbations = watermarks.median(dim=0).values
         else:
             raise ValueError(f"Unsupported PA: {PA}")
-        if budget is not None:
-            l_inf = torch.norm(all_perturbations, p=float('inf'), dim=(1, 2, 3))
-            l_inf = l_inf.reshape(-1, 1, 1, 1)
-            all_perturbations = all_perturbations / l_inf * budget
+        # if budget is not None:
+        #    l_inf = torch.norm(all_perturbations, p=float('inf'), dim=(1, 2, 3))
+        #    l_inf = l_inf.reshape(-1, 1, 1, 1)
+        #    all_perturbations = all_perturbations / l_inf * budget
     elif os.path.exists(path):
         all_perturbations = torch.load(path, map_location='cpu').to(all_watermarked_image.device)
     else:
@@ -617,8 +666,8 @@ def wevade_transfer_batch(all_watermarked_image, target_length, model_list, wate
                 target_watermark_list.append(target_watermark)
         target_watermark_list = torch.stack(target_watermark_list)
 
-        # for _ in tqdm(range(iteration)):
-        for _ in range(iteration):
+        for _ in tqdm(range(iteration)):
+            # for _ in range(iteration):
             if continue_processing_mask.all() == False:
                 # Mask the watermarked images that don't need further processing
                 watermarked_image = all_watermarked_image[continue_processing_mask]

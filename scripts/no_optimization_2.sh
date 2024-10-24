@@ -6,11 +6,11 @@
 nums=(1 2 5 10 20 30 40 50)
 targets=("hidden")
 pas=("mean" "median")
-lengths=(20 30 64)
-types=("cnn" "resnet")
+lengths=(64)
+types=("cnn")
 normalized_options=("" "--normalized")
 normalization_methods=("scale" "clamp")
-data_names=("midjourney")  # New array for data names
+data_names=("DB")  # New array for data names
 
 # Function to handle Ctrl+C and kill all child processes
 cleanup() {

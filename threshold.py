@@ -25,4 +25,8 @@ for n in n_list:
         else:
             x_candidate = k + 1  # Since x = k + 1
             found_x = x_candidate
-    print(f"For n = {n}, the largest x is {found_x}")
+            false_positive_rate = 2 * P_X_less_than_x  # Two-sided test
+    if found_x is not None:
+        print(f"For n = {n}, the largest x is {found_x}, corresponding false positive rate is {false_positive_rate:.3g}")
+    else:
+        print(f"For n = {n}, no x found within the threshold.")

@@ -51,6 +51,7 @@ def main():
     new_run_parser.add_argument('--gpu', default=0, type=int)
 
     new_run_parser.add_argument('--encoder_loss', default=0.7, type=float)
+    new_run_parser.add_argument('--decoder_loss', default=1.0, type=float)
 
     new_run_parser.set_defaults(tensorboard=False)
     new_run_parser.set_defaults(enable_fp16=False)
@@ -103,15 +104,16 @@ def main():
             experiment_name=args.name)
 
         noise_config = args.noise if args.noise is not None else []
+        encoder_blocks = 4 if args.model_type == 'cnn' else 7
         hidden_config = HiDDenConfiguration(H=args.size, W=args.size,
                                             message_length=args.message,
-                                            encoder_blocks=7, # was incorrect to be 4
+                                            encoder_blocks=encoder_blocks,  # was incorrect to be 4
                                             encoder_channels=64,
                                             decoder_blocks=7, decoder_channels=64,
                                             use_discriminator=True,
                                             use_vgg=False,
                                             discriminator_blocks=3, discriminator_channels=64,
-                                            decoder_loss=1,
+                                            decoder_loss=args.decoder_loss,
                                             encoder_loss=args.encoder_loss,
                                             adversarial_loss=1e-3,
                                             enable_fp16=args.enable_fp16

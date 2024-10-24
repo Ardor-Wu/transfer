@@ -1,16 +1,14 @@
 #!/bin/bash
 
-# for exp 2
+# for extended exp 2
 
 # Arrays of parameters
-nums=(1 2 5 10 20 30 40 50)
+nums=(1)
 targets=("hidden")
-pas=("mean" "median")
-lengths=(20 30 64)
-types=("cnn" "resnet")
+pas=("mean")  # Keep mean only
 normalized_options=("" "--normalized")
-normalization_methods=("scale" "clamp")
-data_names=("midjourney")  # New array for data names
+normalization_methods=("clamp")  # Keep clamp only
+data_names=("DB" "midjourney")  # New array for data names
 
 # Function to handle Ctrl+C and kill all child processes
 cleanup() {
@@ -39,27 +37,33 @@ gpu_index=0
 for target in "${targets[@]}"; do
     for pa in "${pas[@]}"; do
         for n in "${nums[@]}"; do
-            for length in "${lengths[@]}"; do
-                for type in "${types[@]}"; do
-                    for data_name in "${data_names[@]}"; do  # New loop over data_names
+            for data_name in "${data_names[@]}"; do  # Loop over data_names
+                # Set types and lengths depending on data_name
+                if [ "$data_name" == "DB" ]; then
+                    types=("cnn")       # For DB, only 'cnn'
+                    lengths=(64)        # For DB, only length 64
+                else
+                    types=("cnn" "resnet")  # For midjourney, both 'cnn' and 'resnet'
+                    lengths=(20 30 64)      # For midjourney, lengths 20, 30, 64
+                fi
+                for length in "${lengths[@]}"; do
+                    for type in "${types[@]}"; do
                         for norm_flag in "${normalized_options[@]}"; do
-                            if [ -z "$norm_flag" ]; then
-                                # When norm_flag is empty, generate command without --normalized and --normalization
-                                gpu=${gpus[$gpu_index]}
-                                cmd="python transfer_attack.py --num_models $n --target $target --PA $pa --device $gpu --no_optimization --target_length $length --model_type $type --data_name $data_name"
-                                commands_per_gpu[$gpu]+="$cmd"$'\n'
-                                # Increment gpu_index modulo number of GPUs
-                                gpu_index=$(( (gpu_index + 1) % ${#gpus[@]} ))
-                            else
-                                # When --normalized is included, loop over normalization methods
-                                for norm in "${normalization_methods[@]}"; do
+                            # When --normalized is included, loop over normalization methods
+                            for norm in "${normalization_methods[@]}"; do
+                                for model_index in {2..11}; do
                                     gpu=${gpus[$gpu_index]}
-                                    cmd="python transfer_attack.py --num_models $n --target $target --PA $pa --device $gpu --no_optimization $norm_flag --normalization $norm --target_length $length --model_type $type --data_name $data_name"
+                                    cmd="python transfer_attack.py --num_models $n --target $target --PA $pa --device $gpu --no_optimization"
+                                    # Add norm_flag and normalization method if norm_flag is not empty
+                                    if [ -n "$norm_flag" ]; then
+                                        cmd+=" $norm_flag --normalization $norm"
+                                    fi
+                                    cmd+=" --target_length $length --model_type $type --model_index $model_index --data_name $data_name"
                                     commands_per_gpu[$gpu]+="$cmd"$'\n'
                                     # Increment gpu_index modulo number of GPUs
                                     gpu_index=$(( (gpu_index + 1) % ${#gpus[@]} ))
                                 done
-                            fi
+                            done
                         done
                     done
                 done

@@ -1,18 +1,13 @@
-from numpy.ma.core import argsort
-
 from model.hidden import Hidden
-# from model.stega import stegamodel
 from noise_layers.noiser import Noiser
 import torch
 import argparse
-from noise_argparser import NoiseArgParser
+
 from options import *
 import os
 import utils
 from attack_func import test_tfattk_hidden
-# from attack_theory_flip_all import test_tfattk_DB_theory
-import logging
-import torchvision.transforms as transforms
+
 from targets.MBRS.MBRS import MBRS
 from targets.stegastamp.stega_stamp import StegaStampModel
 from targets.RivaGAN_inference.RivaGAN_inference import RivaGAN
@@ -36,6 +31,13 @@ def main():
     parser.add_argument('--PA', type=str, default='mean', help='PA for non-optimization method')
     parser.add_argument('--model_type', type=str, default='cnn', help='cnn or resnet')
     parser.add_argument('--resnet_same_encoder', action='store_true')
+    parser.add_argument('--normalization', type=str, default='clamp')
+
+    # Add the new optional argument
+    parser.add_argument('--model_index', type=int, default=1, help='Index of the model when num_models=1')
+    parser.add_argument('--data_name', type=str, default='DB', help='Data name for the model')
+    parser.add_argument('--r', type=float, default=0.25, help='l-inf used in Yuepeng\'s paper')
+
     args = parser.parse_args()
 
     device = torch.device('cuda:' + str(args.device)) if torch.cuda.is_available() else torch.device('cpu')
@@ -57,7 +59,7 @@ def main():
     enable_fp16 = False
     noise = None
     train_type = 'AT'
-    data_name = 'DB'
+    data_name = args.data_name
     wm_method = 'hidden'
     model_type = args.model_type
     white = False
@@ -164,9 +166,19 @@ def main():
 
     sur_cp_folder = '/scratch/qilong3/transferattack/surrogate_model/' + wm_method + '/' + train_type + '/'
 
+    # Existing code to set up variables
+    num_models = args.num_models
+    sur_cp_folder = '/scratch/qilong3/transferattack/surrogate_model/' + wm_method + '/' + train_type + '/'
     sur_cp_list = []
-    for idx in range(num_models):
-        sur_cp_list.append(sur_cp_folder + 'model_' + str(idx + 1) + '.pth')
+
+    # Modify this part
+    if num_models == 1:
+        indices = [args.model_index]
+    else:
+        indices = list(range(1, num_models + 1))
+
+    for idx in indices:
+        sur_cp_list.append(sur_cp_folder + 'model_' + str(idx) + '.pth')
 
     if target == 'hidden':
         target_cp = torch.load(target_cp_file, map_location='cpu')
@@ -194,10 +206,19 @@ def main():
             cp = torch.load(sur_cp_list[idx], map_location='cpu')
         utils.model_from_checkpoint(sur_model_list[idx], cp)
 
-    test_tfattk_hidden(model, sur_model_list, device, target_config, train_options, val_dataset, train_type, model_type,
-                       data_name, wm_method, target, smooth, target_length=target_length, num_models=num_models,
-                       fixed_message=fixed_message, optimization=optimization, PA=PA, budget=budget,
-                       resnet_same_encoder=args.resnet_same_encoder)
+    if args.model_index == 1:
+        test_tfattk_hidden(model, sur_model_list, device, target_config, train_options, val_dataset, train_type,
+                           model_type,
+                           data_name, wm_method, target, smooth, target_length=target_length, num_models=num_models,
+                           fixed_message=fixed_message, optimization=optimization, PA=PA, budget=budget,
+                           resnet_same_encoder=args.resnet_same_encoder, normalization=args.normalization,r=args.r)
+    else:
+        test_tfattk_hidden(model, sur_model_list, device, target_config, train_options, val_dataset, train_type,
+                           model_type,
+                           data_name, wm_method, target, smooth, target_length=target_length, num_models=num_models,
+                           fixed_message=fixed_message, optimization=optimization, PA=PA, budget=budget,
+                           resnet_same_encoder=args.resnet_same_encoder, normalization=args.normalization,
+                           r=args.r, model_index=args.model_index)
 
 
 if __name__ == '__main__':

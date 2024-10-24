@@ -1,0 +1,71 @@
+#!/bin/bash
+
+# Arrays of parameters
+nums=(1 2 5 10 20 30 40 50)
+targets=("hidden")
+pas=("mean" "median")
+lengths=(20 30 64)
+types=("cnn" "resnet")
+normalized_options=("" "--normalized")
+
+# Function to handle Ctrl+C and kill all child processes
+cleanup() {
+    echo "Terminating all running processes..."
+    pkill -P $$
+    exit 1
+}
+
+# Trap Ctrl+C (SIGINT)
+trap cleanup SIGINT
+
+# Initialize arrays to hold commands per GPU
+commands_gpu2=()
+commands_gpu3=()
+
+# Generate the list of commands, assigning them to GPUs
+gpu=2
+for target in "${targets[@]}"; do
+    for pa in "${pas[@]}"; do
+        for n in "${nums[@]}"; do
+            for length in "${lengths[@]}"; do
+                for type in "${types[@]}"; do
+                    # Skip CNN with length 64
+                    if [ "$type" == "cnn" ] && [ "$length" -eq 64 ]; then
+                        continue
+                    fi
+                    for norm in "${normalized_options[@]}"; do
+                        cmd="python transfer_attack.py --num_models $n --target $target --PA $pa --device $gpu --no_optimization $norm --target_length $length --model_type $type"
+                        if [ $gpu -eq 2 ]; then
+                            commands_gpu2+=("$cmd")
+                            gpu=3
+                        else
+                            commands_gpu3+=("$cmd")
+                            gpu=2
+                        fi
+                    done
+                done
+            done
+        done
+    done
+done
+
+# Function to run commands sequentially
+run_commands() {
+    local commands=("$@")
+    for cmd in "${commands[@]}"; do
+        echo "$cmd"
+        eval "$cmd"
+    done
+}
+
+# Run commands on GPU 2 and GPU 3 in parallel
+run_commands "${commands_gpu2[@]}" &
+pid2=$!
+run_commands "${commands_gpu3[@]}" &
+pid3=$!
+
+# Wait for both background processes to finish
+wait $pid2
+wait $pid3
+
+echo "All tasks have been completed."
