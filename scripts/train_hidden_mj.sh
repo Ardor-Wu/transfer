@@ -50,8 +50,8 @@ for model_type in "${model_types[@]}"; do
 
             # Add loss parameters and adjust name only for 64-bit CNN
             if [ "$model_type" == "cnn" ] && [ "$m" == "64" ]; then
-                extra_params="--decoder_loss 8 --encoder_loss 0.175"
-                name_suffix="_dl8_el0.175"
+                extra_params="--decoder_loss 4 --encoder_loss 0.7"
+                name_suffix="_dl4_el0.7"
             fi
 
             # Generate the name parameter

@@ -7,7 +7,9 @@ from tqdm import tqdm
 logs_dir = 'logs'
 
 # Get the list of experiments (directories)
-experiments = sorted(os.listdir(logs_dir))
+# experiments = sorted(os.listdir(logs_dir))
+
+experiments = [f'cnn_64_DB_encoder_loss_{i}_decoder_loss_{j}' for i in (0.0875, 0.175, 0.35, 0.7) for j in (1, 2, 4, 8)]
 
 # Keep only the directories that include 'cnn_64_DB' in their name
 experiments = [experiment for experiment in experiments if 'cnn_64_DB' in experiment]
@@ -28,7 +30,8 @@ def process_log_file(log_file_path):
 
     # Reverse the lines to start from the end
     lines = lines[::-1]
-    in_validation = False
+    # in_validation = False
+    in_validation = True
     current_encoder_mse = None
     current_bitwise_acc = None
 
@@ -36,9 +39,9 @@ def process_log_file(log_file_path):
         line = line.strip()
 
         # Check for validation start
-        if line.startswith("Running validation for epoch"):
-            in_validation = True
-            continue
+        # if line.startswith("Running validation for epoch"):
+        #    in_validation = True
+        #    continue
 
         if in_validation:
             # Check for encoder_mse
@@ -81,7 +84,8 @@ plt.scatter(encoder_mse_values, bitwise_acc_values, color='blue')
 
 # Annotate each point with the experiment name
 for i, name in enumerate(experiment_names):
-    plt.annotate(name[len('cnn_64_DB_encoder_loss_'):], (encoder_mse_values[i], bitwise_acc_values[i]), textcoords="offset points",
+    plt.annotate(name[len('cnn_64_DB_encoder_loss_'):], (encoder_mse_values[i], bitwise_acc_values[i]),
+                 textcoords="offset points",
                  xytext=(0, 10),
                  ha='right')
 

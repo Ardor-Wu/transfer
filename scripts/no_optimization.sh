@@ -10,7 +10,7 @@ lengths=(20 30 64)
 types=("cnn" "resnet")
 normalized_options=("" "--normalized")
 normalization_methods=("scale" "clamp")
-data_names=("midjourney")  # New array for data names
+data_names=("DB" "midjourney")  # New array for data names
 
 # Function to handle Ctrl+C and kill all child processes
 cleanup() {
@@ -23,7 +23,7 @@ cleanup() {
 trap cleanup SIGINT
 
 # List of GPUs to use
-gpus=(2)
+gpus=(0)
 
 # Initialize associative array to hold commands per GPU
 declare -A commands_per_gpu

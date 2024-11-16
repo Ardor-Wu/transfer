@@ -1,0 +1,85 @@
+#!/bin/bash
+# for contrast group of exp 2
+
+# GPUs to use (easy to change)
+gpu_ids=(0 1)
+
+# Number of concurrent processes per GPU (easy to adjust)
+processes_per_gpu=1
+
+# Arrays of parameters
+nums=(50)
+targets=("hidden")
+lengths=(30)
+types=("cnn")
+data_names=("DB")
+diffpures=(0.05 0.1 0.2 0.3)
+
+# Function to handle Ctrl+C and kill all child processes
+cleanup() {
+    echo "Interrupt received. Terminating all running processes..."
+    kill -- -$$
+    exit 1
+}
+
+# Trap Ctrl+C (SIGINT)
+trap cleanup SIGINT
+
+# Array to hold commands
+declare -a cmds
+
+# Loop over parameters to generate commands
+for data_name in "${data_names[@]}"; do
+    for target in "${targets[@]}"; do
+        for n in "${nums[@]}"; do
+            for length in "${lengths[@]}"; do
+                for type in "${types[@]}"; do
+                    for diffpure in "${diffpures[@]}"; do
+                        cmd="python /scratch/qilong3/transferattack/transfer_attack.py \
+--num_models $n \
+--target_length $length \
+--model_type $type \
+--data_name $data_name \
+--diffpure $diffpure"
+                        cmds+=("$cmd")
+                    done
+                done
+            done
+        done
+    done
+done
+
+# Function to execute commands on GPUs in parallel
+run_commands_on_gpus() {
+    num_gpus=${#gpu_ids[@]}
+    total_processes=$((num_gpus * processes_per_gpu))
+    cmd_index=0
+    num_cmds=${#cmds[@]}
+
+    # Create an array to keep track of processes
+    declare -a pids
+
+    while [ $cmd_index -lt $num_cmds ]; do
+        for gpu_index in "${!gpu_ids[@]}"; do
+            for ((i=0; i<processes_per_gpu; i++)); do
+                if [ $cmd_index -ge $num_cmds ]; then
+                    break 2
+                fi
+                gpu=${gpu_ids[$gpu_index]}
+                cmd="${cmds[$cmd_index]}"
+                echo "Running on GPU $gpu: $cmd"
+                CUDA_VISIBLE_DEVICES="$gpu" eval "$cmd" &
+                pids+=($!)
+                cmd_index=$((cmd_index + 1))
+            done
+        done
+        # Wait for all processes to finish before starting next batch
+        wait "${pids[@]}"
+        pids=()
+    done
+}
+
+# Run all commands
+run_commands_on_gpus
+
+echo "All tasks have been completed."

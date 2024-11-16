@@ -1,42 +1,70 @@
 import os
-
+import csv
+import logging
+import time
+from collections import defaultdict
+import numpy as np
+import torch
+from average_meter import AverageMeter
 from torchmetrics import AUROC
 
-import torch
-import numpy as np
-import utils
-import logging
-from collections import defaultdict
-import random
-import math
-import torchvision
-
-from average_meter import AverageMeter
-
-from torch import nn
 from tqdm import tqdm
-from torchmetrics.image import StructuralSimilarityIndexMeasure
-from pytorch_msssim import ssim
+from utils import GuidedDiffusion, dict2namespace, get_data_loaders_DB, get_data_loaders_midjourney, \
+    get_data_loaders_nlb, log_progress, transform_image, transform_image_stablesign
 
-torch.autograd.set_detect_anomaly(True)
+from attack_funcs_2 import wevade_transfer_batch, save_images_and_compute_metrics, get_val_data_loader, DiffPure, \
+    compute_tdr_avg
 
 
-def get_val_data_loader(data_name, hidden_config, train_options, val_dataset, train=False):
-    if 'DB' in data_name:
-        val_data = utils.get_data_loaders_DB(hidden_config, train_options, dataset=val_dataset, train=train)
-        data_type = 'batch_dict'
-        max_batches = None
-    elif 'midjourney' in data_name:
-        val_data = utils.get_data_loaders_midjourney(hidden_config, train_options, dataset=val_dataset, train=train)
-        data_type = 'image_label'
-        max_batches = None
-    elif 'nlb' in data_name:
-        val_data = utils.get_data_loaders_nlb(hidden_config, train_options, dataset=val_dataset)
-        data_type = 'image_label'
-        max_batches = 1
-    else:
-        raise ValueError(f"Unknown data_name: {data_name}")
-    return val_data, data_type, max_batches
+# torch.autograd.set_detect_anomaly(True)
+
+
+def decode_messages_unwatermarked(model, images) -> torch.Tensor:
+    """Decode messages from unwatermarked images and return rounded binary messages."""
+    model.decoder.eval()
+    with torch.no_grad():
+        decoded_messages = model.decoder(images)
+    decoded_rounded = torch.clamp(torch.round(decoded_messages), 0, 1).float()
+    return decoded_rounded
+
+
+def build_results_dir(r, wm_method, target, model_type, watermark_length, target_length, train_type, num_models,
+                      fixed_message, data_name, optimization, PA, budget, normalization, model_index,
+                      resnet_same_encoder, visualization, diffpure):
+    """Build the directory string for saving results."""
+    dir_string = (
+            'results/' + str(r) + '/' +
+            wm_method + '_to_' + target + '_' + model_type + '_' +
+            str(watermark_length) + '_to_' + str(target_length) + 'bits' + train_type + '_' + str(num_models) + 'models'
+    )
+
+    if 'midjourney' in data_name:
+        dir_string += '_midjourney'
+    if diffpure > 0:
+        dir_string += '_diffpure_' + str(diffpure)
+    elif not optimization:
+        dir_string += '_no_optimization'
+        if PA == 'mean':
+            dir_string += '_mean'
+        elif PA == 'median':
+            dir_string += '_median'
+        if budget is not None:
+            dir_string += f'_budget_{budget}'
+            dir_string += f'_{normalization}'
+        if not model_index == 1 and num_models == 1:
+            dir_string += f'_model_{model_index}'
+
+    # optional but no longer used
+    if fixed_message:
+        dir_string += '_fixed_message'
+
+    if resnet_same_encoder:
+        dir_string += '_resnet_same_encoder'
+
+    if visualization:
+        dir_string += '_visualization'
+
+    return dir_string
 
 
 def test_tfattk_hidden(
@@ -66,35 +94,26 @@ def test_tfattk_hidden(
         normalization=None,
         debug=False,
         model_index=1,
-        r=0.25
+        r=0.25,
+        diffpure=0,
+        visualization=False,
+        attack_type='transfer',
+        no_cache=False
 ):
-    dir_string = (
-            'results/' + str(r) + '/' +
-            wm_method + '_to_' + target + '_' + model_type + '_' +
-            str(watermark_length) + '_to_' + str(target_length) + 'bits' + train_type + '_' + str(num_models) + 'models'
+    """Test transfer attack on Hidden watermarking method."""
+    # Build directory string for saving results
+    dir_string = build_results_dir(
+        r, wm_method, target, model_type, watermark_length, target_length, train_type, num_models,
+        fixed_message, data_name, optimization, PA, budget, normalization, model_index,
+        resnet_same_encoder, visualization, diffpure
     )
-    if fixed_message:
-        dir_string += '_fixed_message'
 
-    if 'midjourney' in data_name:
-        dir_string += '_midjourney'
+    # Ensure the directory exists
+    os.makedirs(dir_string, exist_ok=True)
 
-    if not optimization:
-        dir_string += '_no_optimization'
-        if PA == 'mean':
-            dir_string += '_mean'
-        elif PA == 'median':
-            dir_string += '_median'
-        if budget is not None:
-            dir_string += f'_budget_{budget}'
-            dir_string += f'_{normalization}'
-        if not model_index == 1 and num_models == 1:
-            dir_string += f'_model_{model_index}'
-    if resnet_same_encoder:
-        dir_string += '_resnet_same_encoder'
-
-    # Configure logging to write messages with level INFO or higher to a file
-    logging.basicConfig(filename=dir_string + '.log', filemode='w', level=logging.INFO)
+    # Configure logging to save the log file inside dir_string
+    log_file_path = os.path.join(dir_string, 'results.log')
+    logging.basicConfig(filename=log_file_path, filemode='w', level=logging.INFO)
 
     # Get the validation data loader and data_type
     val_data, data_type, max_batches = get_val_data_loader(data_name, hidden_config, train_options, val_dataset,
@@ -109,42 +128,30 @@ def test_tfattk_hidden(
     all_decoded_attk = []
     all_true = []
 
-    # Initialize AUROC metric (multilabel classification)
+    # Initialize AUROC metric (binary classification)
     auroc_metric = AUROC(task='binary').to(device)
 
     all_decoded_ori = []
 
+    per_image_metrics_all = []
+
+    if diffpure > 0:
+        diffpure_transform = DiffPure(steps=diffpure, device=device)
+
+    total_elapsed_time = 0  # Initialize total elapsed time
+
     for data in tqdm(iter(val_data)):
         num += 1
-        if data_type == 'batch_dict':
-            image = data['image'].to(device)
-        elif data_type == 'image_label':
-            image, _ = data
-            image = image.to(device)
+        image, message = prepare_batch(data, data_type, hidden_config, device, num, fixed_message)
+
+        # Determine attack type
+        if diffpure > 0:
+            attack_type = 'diffpure'
         else:
-            raise ValueError(f"Unknown data_type: {data_type}")
+            attack_type = 'transfer'
 
-        if fixed_message:
-            watermark_message = '0001101101000010001110111010101010001100010111001011100110011010101010100100101110010101110000011000000110101001000100101011011010111100011010000010000010101111100111010101111101010010110000101101100110101110000011100010001110101010010001110000001101001101'
-            # Convert each bit character to a float (0.0 or 1.0)
-            message_bits = [float(bit) for bit in watermark_message[:hidden_config.message_length]]
-
-            # Create a PyTorch tensor from the list of floats
-            message = torch.tensor(message_bits, dtype=torch.float).to(device)
-            batch_size = image.shape[0]  # Assuming image is a tensor with shape [batch_size, ...]
-            # Repeat the message and flatten
-            message = message.repeat(batch_size, 1)
-        else:
-            if hidden_config.message_length == 30:
-                message_path = './message/' + str(hidden_config.message_length) + 'bits_message_' + str(num) + '.pth'
-                message = torch.load(message_path, map_location=device).to(device)
-            else:
-                message = torch.randint(0, 2, (image.size(0), hidden_config.message_length)).float().to(device)
-
-        # Capture the additional returned variables
-        losses, (
-            encoded_images, attk_images, decoded_messages, decoded_messages_attk_var
-        ), _ = tfattk_validate_on_batch(
+        # Process the batch
+        losses, batch_results, batch_elapsed_time = tfattk_validate_on_batch(
             model,
             [image, message],
             model_list,
@@ -163,36 +170,123 @@ def test_tfattk_hidden(
             resnet_same_encoder=resnet_same_encoder,
             normalization=normalization,
             data_name=data_name,
-            r=r
+            r=r,
+            save_dir=dir_string,
+            is_first_batch=True,
+            attack_type=attack_type,
+            diffpure_transform=diffpure_transform if diffpure > 0 else None,
+            visualization=visualization,  # Pass visualization parameter
+            no_cache=no_cache
         )
+
+        # Accumulate elapsed time
+        total_elapsed_time += batch_elapsed_time
+
+        # Unpack batch results
+        encoded_images, attk_images, decoded_messages, decoded_messages_attk_var, per_image_metrics = batch_results
+
+        # Accumulate per-image metrics from all batches
+        per_image_metrics_all.extend(per_image_metrics)
 
         decoded_original = decode_messages_unwatermarked(model, image)
         all_decoded_ori.append(decoded_original.detach().cpu())
 
-        for name, loss in losses.items():
-            validation_losses[name].update(loss)
+        update_validation_losses(validation_losses, losses)
 
         # Collect decoded messages and true messages for AUROC
         all_decoded.append(decoded_messages.detach().cpu())
         all_true.append(message.detach().cpu())
 
         if encode_wm:
-            if smooth:
-                if decoded_messages_attk_var is not None:
-                    decoded_attk = decoded_messages_attk_var.detach().cpu()
-                else:
-                    decoded_attk = None
-            else:
-                if decoded_messages_attk_var is not None:
-                    decoded_attk = decoded_messages_attk_var.detach().cpu()
-                else:
-                    decoded_attk = None
+            decoded_attk = process_decoded_attk(decoded_messages_attk_var, smooth)
             if decoded_attk is not None:
                 all_decoded_attk.append(decoded_attk)
 
-        if max_batches is not None and num >= max_batches:
+        if visualization and num >= 1:
             break
 
+        if max_batches is not None and num >= max_batches:
+            break
+        # clear cache
+        torch.cuda.empty_cache()
+
+    process_and_log_results(
+        all_decoded_ori,
+        all_decoded,
+        all_true,
+        all_decoded_attk,
+        hidden_config,
+        validation_losses,
+        auroc_metric,
+        dir_string,
+        per_image_metrics_all,
+        total_elapsed_time  # Pass elapsed time
+    )
+
+
+def prepare_batch(data, data_type, hidden_config, device, num, fixed_message):
+    """Prepare the batch data."""
+    if data_type == 'batch_dict':
+        image = data['image'].to(device)
+    elif data_type == 'image_label':
+        image, _ = data
+        image = image.to(device)
+    else:
+        raise ValueError(f"Unknown data_type: {data_type}")
+
+    # Do not resize images here; they should remain at 128x128 unless using DiffPure
+
+    if fixed_message:
+        watermark_message = '0001101101000010001110111010101010001100010111001011100110011010'
+        # Convert each bit character to a float (0.0 or 1.0)
+        message_bits = [float(bit) for bit in watermark_message[:hidden_config.message_length]]
+        message = torch.tensor(message_bits, dtype=torch.float).to(device)
+        batch_size = image.shape[0]
+        message = message.repeat(batch_size, 1)
+    else:
+        if hidden_config.message_length == 30:
+            message_path = './message/' + str(hidden_config.message_length) + 'bits_message_' + str(num) + '.pth'
+            message = torch.load(message_path, map_location=device).to(device)
+        else:
+            message = torch.randint(0, 2, (image.size(0), hidden_config.message_length)).float().to(device)
+
+    return image, message
+
+
+def process_decoded_attk(decoded_messages_attk_var, smooth):
+    """Process the attacked decoded messages."""
+    if smooth:
+        if decoded_messages_attk_var is not None:
+            decoded_attk = decoded_messages_attk_var.detach().cpu()
+        else:
+            decoded_attk = None
+    else:
+        if decoded_messages_attk_var is not None:
+            decoded_attk = decoded_messages_attk_var.detach().cpu()
+        else:
+            decoded_attk = None
+    return decoded_attk
+
+
+def update_validation_losses(validation_losses, losses):
+    """Update the validation losses."""
+    for name, loss in losses.items():
+        validation_losses[name].update(loss)
+
+
+def process_and_log_results(
+        all_decoded_ori,
+        all_decoded,
+        all_true,
+        all_decoded_attk,
+        hidden_config,
+        validation_losses,
+        auroc_metric,
+        dir_string,
+        per_image_metrics_all,
+        elapsed_time
+):
+    """Process results and log metrics."""
     if len(all_decoded_ori) > 0:
         all_decoded_ori = torch.cat(all_decoded_ori, dim=0).view(-1, hidden_config.message_length)
     else:
@@ -207,7 +301,7 @@ def test_tfattk_hidden(
     else:
         all_decoded_attk = None
 
-    # round all_decoded and all_decoded_attk to 0 and 1 in float
+    # Round all_decoded and all_decoded_attk to 0 and 1 in float
     all_decoded = torch.round(all_decoded)
     if all_decoded_attk is not None:
         all_decoded_attk = torch.clamp(torch.round(all_decoded_attk), 0, 1).float()
@@ -218,14 +312,11 @@ def test_tfattk_hidden(
         acc_image_wise_attk = 1 - torch.sum(torch.abs(all_decoded_attk - all_true),
                                             dim=1) / hidden_config.message_length
 
-    # 0 for ori and 1 for watermarked (attk and not attacked)
+    # 0 for original and 1 for watermarked (attacked and not attacked)
     labels_ori = torch.zeros_like(ori_acc_image_wise)
     labels_wm = torch.ones_like(acc_image_wise)
-    # if all_decoded_attk is not None:
-    #    labels_attk = torch.ones_like(acc_image_wise_attk)
+
     labels_ori_wm = torch.cat([labels_ori, labels_wm], dim=0)
-    # if all_decoded_attk is not None:
-    #    labels_ori_wm_attk = torch.cat([labels_ori, labels_wm], dim=0)
 
     preds_ori_wm = torch.cat([ori_acc_image_wise, acc_image_wise], dim=0)
     preds_ori_wm_attk = torch.cat([ori_acc_image_wise, acc_image_wise_attk], dim=0)
@@ -233,89 +324,36 @@ def test_tfattk_hidden(
     auroc_unattacked = auroc_metric(preds_ori_wm, labels_ori_wm)
     auroc = auroc_metric(preds_ori_wm_attk, labels_ori_wm)
 
-    # when debug is True, plot preds_ori_wm_attk and labels_ori_wm
-
-    if debug:
-        import matplotlib.pyplot as plt
-        plt.plot(preds_ori_wm_attk, label=f'bitwise_acc_auroc={auroc}')
-        plt.plot(labels_ori_wm, label='labels')
-        plt.legend()
-        plt.show()
-
-    # Compute AUROC
-
     # Add AUROC to the validation losses
     validation_losses['auroc_unattacked'] = AverageMeter()
     validation_losses['auroc'] = AverageMeter()
     validation_losses['auroc_unattacked'].update(auroc_unattacked)
     validation_losses['auroc'].update(auroc)
 
-    # Log all metrics including AUROC
-    utils.log_progress(validation_losses)
+    # Compute average LPIPS over all images
+    lpips_values = [float(metric['lpips']) for metric in per_image_metrics_all if 'lpips' in metric]
+    average_lpips = np.mean(lpips_values)
 
+    # Update validation losses with the correct LPIPS value
+    validation_losses['LPIPS'] = AverageMeter()
+    validation_losses['LPIPS'].update(average_lpips)
 
-def compute_tdr_avg(decoded_rounded, decoded_rounded_attk, messages, smooth, median_bitwise_errors=None):
-    threshold2_numerators = {
-        20: 2,
-        30: 5,
-        32: 5,
-        48: 11,
-        64: 17,
-        100: 31  # <1e-4 false positive rate
-    }
+    # Add elapsed time to validation losses
+    validation_losses['elapsed_time'] = AverageMeter()
+    validation_losses['elapsed_time'].update(elapsed_time)
 
-    message_length = messages.size(1)
-    if message_length in threshold2_numerators:
-        threshold2_numerator = threshold2_numerators[message_length]
-        threshold1_numerator = message_length - threshold2_numerator
-        threshold1 = threshold1_numerator / message_length
-        threshold2 = threshold2_numerator / message_length
-    else:
-        raise ValueError(f"Unsupported message length: {message_length}")
+    # Log all metrics including AUROC and elapsed time
+    log_progress(validation_losses)
 
-    messages_numpy = messages.detach().cpu().numpy()
-    decoded_numpy = decoded_rounded
-    bit_errors = np.sum(np.abs(decoded_numpy - messages_numpy), axis=1)
-    per_message_accuracy = 1 - bit_errors / message_length
-    tdr_avg_1 = np.mean(per_message_accuracy > threshold1)
-    tdr_avg_2 = np.mean(per_message_accuracy < threshold2)
+    # Save per-image metrics to CSV
+    csv_file_path = os.path.join(dir_string, 'per_image_metrics.csv')
+    with open(csv_file_path, mode='w', newline='') as csvfile:
+        fieldnames = ['image_index', 'l_inf', 'l2', 'ssim', 'lpips', 'bitwise_accuracy', 'bitwise_accuracy_attk']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-    if smooth:
-        if median_bitwise_errors is None:
-            raise ValueError("median_bitwise_errors must be provided when smooth is True")
-        per_message_accuracy_attk = 1 - median_bitwise_errors / message_length
-    else:
-        decoded_attk_numpy = decoded_rounded_attk
-        bit_errors_attk = np.sum(np.abs(decoded_attk_numpy - messages_numpy), axis=1)
-        per_message_accuracy_attk = 1 - bit_errors_attk / message_length
-
-    tdr_avg_attk_1 = np.mean(per_message_accuracy_attk > threshold1)
-    tdr_avg_attk_2 = np.mean(per_message_accuracy_attk < threshold2)
-
-    return tdr_avg_1, tdr_avg_2, tdr_avg_attk_1, tdr_avg_attk_2
-
-
-def decode_messages_unwatermarked(
-        model,
-        images,
-) -> torch.Tensor:
-    """
-    Decode messages from unwatermarked images and return rounded binary messages.
-
-    Args:
-        model (nn.Module): The watermarking model with encoder and decoder.
-        unwatermarked_loader (DataLoader): DataLoader providing unwatermarked images.
-        device (torch.device): Device to perform computations on.
-
-    Returns:
-        torch.Tensor: Tensor of decoded messages rounded to 0 and 1 bits.
-    """
-    model.decoder.eval()
-
-    decoded_messages = model.decoder(images)
-    decoded_rounded = torch.clamp(torch.round(decoded_messages), 0, 1).float()
-
-    return decoded_rounded
+        writer.writeheader()
+        for metric in per_image_metrics_all:
+            writer.writerow(metric)
 
 
 def tfattk_validate_on_batch(
@@ -339,32 +377,97 @@ def tfattk_validate_on_batch(
         resnet_same_encoder=False,
         normalization='clamp',
         data_name='DB',
-        r=0.25
+        r=0.25,
+        save_dir=None,
+        is_first_batch=False,
+        attack_type='transfer',
+        diffpure_transform=None,
+        visualization=False,
+        no_cache=False
 ):
     # Unpack the batch
     images, messages = batch
     batch_size = images.shape[0]
 
     if encode_wm:
-        model.encoder.eval()
-        model.decoder.eval()
-        with torch.no_grad():
-            encoded_images = model.encoder(images, messages)
+        encoded_images = encode_watermark(model, images, messages)
     else:
         if model is not None:
             model.eval()
         encoded_images = images
 
-    encoded_images = encoded_images.clamp(-1, 1)  # should add this
-    # average l_inf added by the target model
+    encoded_images = encoded_images.clamp(-1, 1)
 
-    # l_inf = torch.max(torch.abs(encoded_images - images), dim=1, keepdim=True)[0].max(dim=2, keepdim=True)[0].max(dim=3,
-    #                                                                                                              keepdim=True)[
-    #    0].reshape(-1).mean()
-    # 1.7030 for 64 bits for the first 100 images
-    # 0.8690 for 20 bits
-    # 0.7737 for 30 bits
+    # Start timing here
+    start_time = time.time()
+    if attack_type == 'transfer':
+        attk_images = perform_transfer_attack(
+            model, encoded_images, messages, model_list, num, train_type, model_type, attk_param, pp, wm_method,
+            target, encode_wm, white, fixed_message, optimization, PA, budget, resnet_same_encoder, normalization,
+            data_name, r, visualization,
+            no_cache=no_cache
+        )
+    elif attack_type == 'diffpure':
+        attk_images = perform_diffpure_attack(encoded_images, diffpure_transform)
+    else:
+        raise ValueError(f"Unsupported attack_type: {attack_type}")
+    # End timing here
+    elapsed_time = time.time() - start_time
 
+    # Decode messages
+    decoded_messages, decoded_messages_attk_var = decode_messages(
+        model, encoded_images, attk_images, encode_wm, smooth, images.device
+    )
+
+    # Save images and compute per-image metrics if it's the first batch
+    per_image_metrics = []
+    if is_first_batch:
+        per_image_metrics = save_images_and_compute_metrics(
+            images, encoded_images, attk_images, decoded_messages,
+            decoded_messages_attk_var,
+            messages, num, save_dir, encode_wm, smooth
+        )
+
+    # Compute losses
+    losses = compute_losses(
+        model, decoded_messages, decoded_messages_attk_var, messages, batch_size, encode_wm, smooth, per_image_metrics,
+        encoded_images, attk_images  # Pass encoded and attacked images
+    )
+
+    return losses, (
+        encoded_images,
+        attk_images,
+        decoded_messages,
+        decoded_messages_attk_var,
+        per_image_metrics
+    ), elapsed_time
+
+
+def encode_watermark(model, images, messages):
+    """Encode the watermark into the images."""
+    model.encoder.eval()
+    model.decoder.eval()
+    with torch.no_grad():
+        # if messages.shape[-1] == 256:  # MBRS, scale to 256 by 256
+        #    images_to_encode = torch.nn.functional.interpolate(images, size=(256, 256), mode='bilinear',
+        # align_corners = False)
+        #     encoded_images = model.encoder(images_to_encode, messages)
+        # rescale to 128 by 128
+        #     encoded_images = torch.nn.functional.interpolate(encoded_images, size=(128, 128), mode='bilinear',
+        # align_corners = False)
+        # else:
+        encoded_images = model.encoder(images, messages)
+    return encoded_images
+
+
+def perform_transfer_attack(
+        model, encoded_images, messages, model_list, num, train_type, model_type, attk_param, pp, wm_method, target,
+        encode_wm, white, fixed_message, optimization, PA, budget, resnet_same_encoder, normalization, data_name, r,
+        visualization=False,  # Added visualization parameter
+        no_cache=False
+):
+    """Perform the transfer attack."""
+    # Generate noise for attack
     noise = wevade_transfer_batch(
         encoded_images.clone(),
         messages.size(1),
@@ -387,360 +490,135 @@ def tfattk_validate_on_batch(
         PA=PA,
         budget=budget,
         resnet_same_encoder=resnet_same_encoder,
-        data_name=data_name
+        data_name=data_name,
+        visualization=visualization,  # Pass visualization parameter,
+        no_cache=no_cache
     )
 
     with torch.no_grad():
         attk_images = encoded_images + noise
         if budget:
-            attk_images = attk_images.clamp(-1, 1)
-            real_noise = attk_images - encoded_images
-            l_inf = torch.norm(real_noise, p=float('inf'), dim=(1, 2, 3))
-            l_inf = l_inf.reshape(-1, 1, 1, 1)
-            if normalization == 'scale':
-                attk_images = encoded_images + real_noise / l_inf * budget
-            elif normalization == 'clamp':
-                real_noise = torch.clamp(real_noise, -budget, budget)
-                attk_images = encoded_images + real_noise
-            else:
-                raise ValueError(f"Unsupported normalization: {normalization}")
+            attk_images = adjust_attk_images_budget(attk_images, encoded_images, budget, normalization)
 
-        if encode_wm:
-            attk_images = utils.transform_image(attk_images, model.device)
-        else:
-            if model is not None:
-                encoded_images_tdr = utils.transform_image_stablesign(encoded_images, images.device)
-                attk_images_tdr = utils.transform_image_stablesign(attk_images, images.device)
-            encoded_images = utils.transform_image(encoded_images, images.device)
-            attk_images = utils.transform_image(attk_images, images.device)
+        # Do not resize images; keep them at 128x128
 
+    return attk_images
+
+
+def perform_diffpure_attack(encoded_images, diffpure_transform):
+    """Apply the DiffPure attack."""
+    with torch.no_grad():
+        # Apply DiffPure to the encoded images
+        attk_images = diffpure_transform(encoded_images)
+        # Images are resized within DiffPure class
+    return attk_images
+
+
+def decode_messages(model, encoded_images, attk_images, encode_wm, smooth, device):
+    """Decode messages from images."""
+    with torch.no_grad():
         if encode_wm:
+            attk_images = transform_image(attk_images, model.device)
+            encoded_images = transform_image(encoded_images, model.device)
+
             decoded_messages = model.decoder(encoded_images)
             if smooth:
                 decoded_messages_attk_all = []
                 for image in attk_images:
                     noised_images = []
-                    for i in range(100):
-                        gaussian_noise = torch.randn(image.shape).to(images.device)
+                    for _ in range(100):
+                        gaussian_noise = torch.randn(image.shape).to(device)
                         noised_image = image + 0.0015 * gaussian_noise
                         noised_images.append(noised_image)
                     noised_images = torch.stack(noised_images)
                     decoded_messages_attk = model.decoder(noised_images)
                     decoded_messages_attk_all.append(decoded_messages_attk)
                 decoded_messages_attk_all = torch.stack(decoded_messages_attk_all)
+                decoded_messages_attk_var = decoded_messages_attk_all
             else:
                 decoded_messages_attk = model.decoder(attk_images)
+                decoded_messages_attk_var = decoded_messages_attk
         else:
             if model is not None:
+                encoded_images_tdr = transform_image_stablesign(encoded_images, device)
+                attk_images_tdr = transform_image_stablesign(attk_images, device)
                 decoded_messages = model(encoded_images_tdr) + 0.5
                 decoded_messages_attk = model(attk_images_tdr) + 0.5
+                decoded_messages_attk_var = decoded_messages_attk
+            else:
+                decoded_messages = None
+                decoded_messages_attk_var = None
+    return decoded_messages, decoded_messages_attk_var
 
+
+def adjust_attk_images_budget(attk_images, encoded_images, budget, normalization):
+    """Adjust the attacked images based on budget constraints."""
+    attk_images = attk_images.clamp(-1, 1)
+    real_noise = attk_images - encoded_images
+    l_inf = torch.norm(real_noise, p=float('inf'), dim=(1, 2, 3))
+    l_inf = l_inf.reshape(-1, 1, 1, 1)
+    if normalization == 'scale':
+        attk_images = encoded_images + real_noise / l_inf * budget
+    elif normalization == 'clamp':
+        real_noise = torch.clamp(real_noise, -budget, budget)
+        attk_images = encoded_images + real_noise
+    else:
+        raise ValueError(f"Unsupported normalization: {normalization}")
+    return attk_images
+
+
+def compute_losses(model, decoded_messages, decoded_messages_attk_var, messages, batch_size, encode_wm, smooth,
+                   per_image_metrics, encoded_images, attk_images):
+    """Compute the losses for the batch."""
     if model is not None:
         decoded_rounded = decoded_messages.detach().cpu().numpy().round().clip(0, 1)
-        if encode_wm:
-            if smooth:
-                decoded_rounded_attk_all = decoded_messages_attk_all.detach().cpu().numpy().round().clip(0, 1)
-            else:
-                decoded_rounded_attk = decoded_messages_attk.detach().cpu().numpy().round().clip(0, 1)
-        bitwise_avg_err = np.sum(np.abs(decoded_rounded - messages.detach().cpu().numpy())) / (
-                batch_size * messages.shape[1])
+        messages_np = messages.detach().cpu().numpy()
+        bitwise_avg_err = np.sum(np.abs(decoded_rounded - messages_np)) / (batch_size * messages.shape[1])
+
         if encode_wm and smooth:
-            messages_np = messages.detach().cpu().numpy()
             messages_expanded = messages_np[:, None, :]
+            decoded_rounded_attk_all = decoded_messages_attk_var.detach().cpu().numpy().round().clip(0, 1)
             bitwise_errors = np.abs(decoded_rounded_attk_all - messages_expanded)
             bitwise_error_sums = np.sum(bitwise_errors, axis=2)
             median_bitwise_errors = np.median(bitwise_error_sums, axis=1)
             bitwise_avg_err_attk = np.mean(median_bitwise_errors) / messages.shape[1]
         elif encode_wm:
-            bitwise_avg_err_attk = np.sum(np.abs(decoded_rounded_attk - messages.detach().cpu().numpy())) / (
+            decoded_rounded_attk = decoded_messages_attk_var.detach().cpu().numpy().round().clip(0, 1)
+            bitwise_avg_err_attk = np.sum(np.abs(decoded_rounded_attk - messages_np)) / (
                     batch_size * messages.shape[1])
             median_bitwise_errors = None
         else:
-            bitwise_avg_err_attk = np.sum(np.abs(decoded_rounded_attk - messages.detach().cpu().numpy())) / (
+            decoded_rounded_attk = decoded_messages_attk_var.detach().cpu().numpy().round().clip(0, 1)
+            bitwise_avg_err_attk = np.sum(np.abs(decoded_rounded_attk - messages_np)) / (
                     batch_size * messages.shape[1])
             median_bitwise_errors = None
 
         tdr_avg_1, tdr_avg_2, tdr_avg_attk_1, tdr_avg_attk_2 = compute_tdr_avg(
             decoded_rounded,
-            decoded_rounded_attk_all if encode_wm and smooth else decoded_rounded_attk,
+            decoded_messages_attk_var.detach().cpu().numpy().round().clip(0,
+                                                                          1) if encode_wm and not smooth else decoded_rounded_attk_all,
             messages,
             encode_wm and smooth,
             median_bitwise_errors
         )
 
-    ssim_value = []
-    for i in range(encoded_images.shape[0]):
-        SSIM_metric = StructuralSimilarityIndexMeasure(data_range=attk_images[i].max() - attk_images[i].min()).to(
-            encoded_images.device)
-        ssim_value.append(SSIM_metric(encoded_images[i].unsqueeze(0), attk_images[i].unsqueeze(0)).cpu().numpy())
-    ssim_value = [0 if x == -math.inf else x for x in ssim_value]
-    ssim_value = np.array(ssim_value)
-    ssim_value[np.isnan(ssim_value)] = 0
+        # Compute L-2 and L-inf norms between images
+        l_inf_values = torch.norm((encoded_images - attk_images).reshape(encoded_images.size(0), -1), p=float('inf'),
+                                  dim=1)
+        l2_values = torch.norm((encoded_images - attk_images).reshape(encoded_images.size(0), -1), p=2, dim=1)
 
-    if encode_wm:
         losses = {
-            'noise (L-infinity)  ': torch.mean(
-                torch.norm((encoded_images - attk_images).reshape(encoded_images.size(0), -1), p=float('inf'),
-                           dim=1)).item(),
-            'noise (L-2)         ': torch.mean(
-                torch.norm((encoded_images - attk_images).reshape(encoded_images.size(0), -1), p=2, dim=1)).item(),
+            'noise (L-infinity)  ': l_inf_values.mean().item(),
+            'noise (L-2)         ': l2_values.mean().item(),
             'bitwise-acc         ': 1 - bitwise_avg_err,
             'bitwise-acc_attk    ': 1 - bitwise_avg_err_attk,
             'tdr                 ': tdr_avg_1 + tdr_avg_2,
             'tdr_attk            ': tdr_avg_attk_1 + tdr_avg_attk_2,
-            'ssim                ': np.mean(ssim_value),
+            'ssim                ': np.mean(
+                [float(metric['ssim']) for metric in per_image_metrics]) if per_image_metrics else 0,
+            # 'LPIPS               ': np.mean(
+            #    [float(metric['lpips']) for metric in per_image_metrics]) if per_image_metrics else 0,
         }
     else:
-        if model is not None:
-            losses = {
-                'noise (L-infinity)  ': torch.mean(
-                    torch.norm((encoded_images - attk_images).view(encoded_images.size(0), -1), p=float('inf'),
-                               dim=1)).item(),
-                'noise (L-2)         ': torch.mean(
-                    torch.norm((encoded_images - attk_images).view(encoded_images.size(0), -1), p=2, dim=1)).item(),
-                'bitwise-acc         ': 1 - bitwise_avg_err,
-                'bitwise-acc_attk    ': 1 - bitwise_avg_err_attk,
-                'tdr                 ': tdr_avg_1 + tdr_avg_2,
-                'tdr_attk            ': tdr_avg_attk_1 + tdr_avg_attk_2,
-                'ssim                ': np.mean(ssim_value),
-            }
-        else:
-            attk_images_transform = (attk_images.clone() + 1) / 2
-            attk_images_transform = attk_images_transform.clamp_(0, 1)
-            save_folder = '/home/yh351/code/tree-ring-watermark-main/' + wm_method + '_' + str(
-                len(model_list)) + '_attk_images'
-            if not os.path.exists(save_folder):
-                os.makedirs(save_folder)
-            for i in range(attk_images_transform.size(0)):
-                torchvision.utils.save_image(attk_images_transform[i], save_folder + f'/attk_image_{i}.png')
-            losses = {
-                'noise (L-infinity)  ': torch.mean(
-                    torch.norm((encoded_images - attk_images).view(encoded_images.size(0), -1), p=float('inf'),
-                               dim=1)).item(),
-                'noise (L-2)         ': torch.mean(
-                    torch.norm((encoded_images - attk_images).view(encoded_images.size(0), -1), p=2, dim=1)).item(),
-                'ssim                ': np.mean(ssim_value),
-            }
-            return losses, (
-                encoded_images, attk_images, decoded_messages, None), num  # No attk messages when encode_wm=False
-
-    # Return losses and the necessary decoded messages
-    if encode_wm:
-        if smooth:
-            return losses, (
-                encoded_images,
-                attk_images,
-                decoded_messages,
-                decoded_messages_attk_all
-            ), num
-        else:
-            return losses, (
-                encoded_images,
-                attk_images,
-                decoded_messages,
-                decoded_messages_attk
-            ), num
-    else:
-        return losses, (
-            encoded_images,
-            attk_images,
-            decoded_messages,
-            None
-        ), num
-
-
-def normalize_image(image):
-    # Convert image to float type for the division operation
-    image = image.astype(np.float32)
-
-    # # Find the maximum and minimum values of the image
-    # min_val = np.min(image)
-    # max_val = np.max(image)
-
-    # # Normalize the image to the range [0, 1]
-    # image_normalized = (image - min_val) / (max_val - min_val)
-
-    image_normalized = (image + 1) / 2
-
-    # Scale to the range [0, 255]
-    image_scaled = np.clip(image_normalized * 255, 0, 255)
-
-    # Make sure to round the values and convert it back to uint8
-    image_output = np.round(image_scaled).astype(np.uint8)
-
-    return image_output
-
-
-def project(param_data, backup, epsilon):
-    # If the perturbation exceeds the upper bound, project it back.
-    r = param_data - backup
-    r = epsilon * r
-
-    return backup + r
-
-
-def wevade_transfer_batch(all_watermarked_image, target_length, model_list, watermark_length, iteration, lr, r, epsilon,
-                          num, name, train_type, model_type, batch_size, wm_method, target, white=False,
-                          fixed_message=False, optimization=True, PA='mean'
-                          , budget=None, resnet_same_encoder=False, data_name='DB'):
-    watermarked_image_cloned = all_watermarked_image.clone()
-    criterion = nn.MSELoss(reduction='mean')
-
-    dataset_name = 'DB' if 'DB' in data_name else 'midjourney'
-    # Construct base directory
-    base_dir = f'./wevade_perturb_{wm_method}_to_{target}_{model_type}_{watermark_length}_to_{target_length}bits/{train_type}/{dataset_name}/{r}'
-
-    # Ensure the directory exists
-    if not os.path.exists(base_dir):
-        os.makedirs(base_dir)
-
-    # Construct filename with 'fixed_message' information
-    filename = (
-        f'ensemble_model{len(model_list)}_{name}_{batch_size}_'
-        f'{int((1 - epsilon) * 100)}_batch_{num}'
-    )
-
-    if fixed_message:
-        filename += '_fixed'
-
-    if white:
-        filename += '_white'
-
-    if not optimization:
-        filename += '_no_optimization'
-        if PA == 'mean':
-            filename += '_mean'
-        elif PA == 'median':
-            filename += '_median'
-    if resnet_same_encoder:
-        filename += '_resnet_same_encoder'
-
-    filename += '.pth'
-
-    # Combine base directory and filename to get the full path
-    path = os.path.join(base_dir, filename)
-
-    if optimization == False:
-        watermarks = []
-        for idx, sur_model in enumerate(model_list):
-            sur_model.encoder.eval()
-
-            with torch.no_grad():
-                sur_model.decoder.eval()
-                decoded_messages = sur_model.decoder(all_watermarked_image)
-                decoded_rounded = torch.clamp(torch.round(decoded_messages), 0, 1)
-                target_watermark = 1 - decoded_rounded
-                watermark = sur_model.encoder(all_watermarked_image, target_watermark) - all_watermarked_image
-                watermarks.append(watermark)
-        watermarks = torch.stack(watermarks)
-        if PA == 'mean':
-            all_perturbations = watermarks.mean(dim=0)
-        elif PA == 'median':
-            all_perturbations = watermarks.median(dim=0).values
-        else:
-            raise ValueError(f"Unsupported PA: {PA}")
-        # if budget is not None:
-        #    l_inf = torch.norm(all_perturbations, p=float('inf'), dim=(1, 2, 3))
-        #    l_inf = l_inf.reshape(-1, 1, 1, 1)
-        #    all_perturbations = all_perturbations / l_inf * budget
-    elif os.path.exists(path):
-        all_perturbations = torch.load(path, map_location='cpu').to(all_watermarked_image.device)
-    else:
-        target_watermark_list = []
-
-        with torch.no_grad():
-            watermarked_image = watermarked_image_cloned.clone()
-            all_perturbations = torch.zeros_like(watermarked_image)
-            continue_processing_mask = torch.ones(watermarked_image.shape[0], dtype=torch.bool,
-                                                  device=watermarked_image.device)
-
-        for idx, sur_model in enumerate(model_list):
-            with torch.no_grad():
-                sur_model.decoder.eval()
-                if white:
-                    decoded_messages = sur_model.decoder(watermarked_image) + 0.5
-                else:
-                    decoded_messages = sur_model.decoder(watermarked_image)
-                decoded_rounded = torch.clamp(torch.round(decoded_messages), 0, 1)
-                target_watermark = 1 - decoded_rounded
-                target_watermark_list.append(target_watermark)
-        target_watermark_list = torch.stack(target_watermark_list)
-
-        for _ in tqdm(range(iteration)):
-            # for _ in range(iteration):
-            if continue_processing_mask.all() == False:
-                # Mask the watermarked images that don't need further processing
-                watermarked_image = all_watermarked_image[continue_processing_mask]
-            watermarked_image = watermarked_image.requires_grad_(True)
-            min_value, _ = torch.min(watermarked_image.reshape(watermarked_image.size(0), -1), dim=1, keepdim=True)
-            max_value, _ = torch.max(watermarked_image.reshape(watermarked_image.size(0), -1), dim=1, keepdim=True)
-            min_value = min_value.view(watermarked_image.size(0), 1, 1, 1)
-            max_value = max_value.view(watermarked_image.size(0), 1, 1, 1)
-
-            grads = 0
-            idx_list = random.sample(range(0, len(model_list)), batch_size)
-            for idx in idx_list:
-                sur_model = model_list[idx]
-                if white:
-                    decoded_watermark = sur_model.decoder(watermarked_image) + 0.5
-                else:
-                    decoded_watermark = sur_model.decoder(watermarked_image)
-                loss = criterion(decoded_watermark,
-                                 target_watermark_list[idx][continue_processing_mask]) * watermarked_image.size(0)
-                if wm_method == 'hidden+stega':
-                    if idx % 2 == 0:
-                        grads += torch.autograd.grad(loss, watermarked_image)[0]
-                    else:
-                        grads += torch.autograd.grad(loss, watermarked_image)[0] / 400
-                else:
-                    grads += torch.autograd.grad(loss, watermarked_image)[0]
-                sur_model.decoder.zero_grad()
-            grads /= len(idx_list)
-
-            with torch.no_grad():
-                watermarked_image = watermarked_image - lr * grads
-                watermarked_image = torch.clamp(watermarked_image, min_value, max_value)
-
-                # Projection.
-                perturbation_norm = torch.norm(watermarked_image - watermarked_image_cloned[continue_processing_mask],
-                                               p=float('inf'), dim=(1, 2, 3), keepdim=True)
-                exceeding_indices = perturbation_norm > r
-                c = torch.where(exceeding_indices, r / perturbation_norm, torch.ones_like(perturbation_norm))
-                if torch.sum(exceeding_indices) > 0:
-                    watermarked_image = project(watermarked_image, watermarked_image_cloned[continue_processing_mask],
-                                                c)
-
-                bit_acc_target = torch.zeros((len(model_list), len(watermarked_image))).to(watermarked_image.device)
-                for idx, sur_model in enumerate(model_list):
-                    sur_model.decoder.eval()
-                    if white:
-                        decoded_watermark = sur_model.decoder(watermarked_image) + 0.5
-                    else:
-                        decoded_watermark = sur_model.decoder(watermarked_image)
-                    rounded_decoded_watermark = decoded_watermark.detach().round().clamp(0, 1)
-                    bit_acc_target[idx] = 1 - (torch.abs(
-                        rounded_decoded_watermark - target_watermark_list[idx][continue_processing_mask]).sum(
-                        dim=1) / watermark_length)
-                # bit_acc_target, _ = torch.min(bit_acc_target, dim=0)
-                # bit_acc_target = torch.mean(bit_acc_target, dim=0)
-                bit_acc_target = torch.mean(bit_acc_target).item()
-                # print('bit_acc_target:', bit_acc_target)
-                # print(bit_acc_target)
-
-                perturbation = watermarked_image - watermarked_image_cloned[continue_processing_mask]
-                all_perturbations[continue_processing_mask] = perturbation
-                all_watermarked_image[continue_processing_mask] = watermarked_image
-                ssim_value = ssim((watermarked_image + 1) / 2,
-                                  (watermarked_image_cloned[continue_processing_mask] + 1) / 2, data_range=1,
-                                  size_average=False)
-
-                conditions_met = (ssim_value <= 0.9).view(-1) | (bit_acc_target >= 1 - epsilon)
-                continue_processing_mask[continue_processing_mask.clone()] &= ~conditions_met
-
-                # If all images in the batch have met the condition, stop processing
-                if not continue_processing_mask.any():
-                    break
-
-        torch.save(all_perturbations, path)
-
-    return all_perturbations
+        losses = {}
+    return losses

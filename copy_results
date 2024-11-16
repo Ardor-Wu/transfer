@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Define source and destination directories
+SRC_DIR="/scratch/qilong3/transferattack/results"
+DEST_DIR="/scratch/qilong3/transferattack/results/0.25"
+
+# Create the destination directory if it doesn't exist
+mkdir -p "$DEST_DIR"
+
+# Copy files containing 'model_' in their names from source to destination
+cp "$SRC_DIR"/*model_* "$DEST_DIR"
