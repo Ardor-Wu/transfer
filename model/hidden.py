@@ -5,13 +5,11 @@ import random
 
 from options import HiDDenConfiguration
 from model.discriminator import Discriminator
-from model.encoder_decoder import EncoderDecoder
 from vgg_loss import VGGLoss
 from noise_layers.noiser import Noiser
 
 from model.encoder import Encoder
 from model.decoder import Decoder
-from model.densenet import DenseNet
 from model.resnet18 import ResNet
 
 ###
@@ -22,11 +20,9 @@ sys.path.append("..")
 from noise_layers.identity import Identity
 from noise_layers.diff_jpeg import DiffJPEG
 from noise_layers.gaussian import Gaussian
-from noise_layers.crop import Crop
-from noise_layers.resize import Resize
 from noise_layers.brightness import Brightness
 from noise_layers.gaussian_blur import GaussianBlur
-from noise_layers.adversarial import Adversarial
+
 
 
 ###

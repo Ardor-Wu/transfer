@@ -12,11 +12,11 @@ data_names=("DB" "midjourney")  # New array for data names
 declare -A types_dict
 declare -A lengths_dict
 
-types_dict["DB"]="cnn"
-lengths_dict["DB"]="64"
+types_dict["DB"]="resnet"
+lengths_dict["DB"]="20 30 64"
 
-types_dict["midjourney"]="cnn"
-lengths_dict["midjourney"]="64"
+types_dict["midjourney"]="resnet"
+lengths_dict["midjourney"]="20 30 64"
 
 # Function to handle Ctrl+C and kill all child processes
 cleanup() {
@@ -29,7 +29,7 @@ cleanup() {
 trap cleanup SIGINT
 
 # List of GPUs to use
-gpus=(0 2 3)
+gpus=(0 1 2 3)
 
 # Initialize associative array to hold commands per GPU
 declare -A commands_per_gpu

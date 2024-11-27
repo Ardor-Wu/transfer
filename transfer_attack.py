@@ -136,7 +136,7 @@ def main():
     if target == 'hidden':
         model = Hidden(target_config, device, noiser, model_type)
     elif target == 'mbrs':
-        if target_length == '64':
+        if target_length == 64:
             model = MBRS(H=size, W=size, message_length=target_length, device=device)
         else:
             model = MBRS(H=256, W=256, message_length=target_length, device=device)

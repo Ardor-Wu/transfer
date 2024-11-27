@@ -2,7 +2,7 @@
 # for contrast group of exp 2
 
 # GPUs to use (easy to change)
-gpu_ids=(0 2 3)
+gpu_ids=(0 1 2 3)
 
 # Arrays of parameters
 nums=(1 2 5 10 20 30 40 50)
@@ -14,10 +14,15 @@ types=("cnn" "resnet")
 data_names=("DB" "midjourney")
 #data_names=("midjourney")
 
+# Temporary directory for status files
+temp_dir="/tmp/$(basename $0)_$$"
+mkdir -p "$temp_dir"
+
 # Function to handle Ctrl+C and kill all child processes
 cleanup() {
     echo "Interrupt received. Terminating all running processes..."
     kill -- -$$
+    rm -rf "$temp_dir"
     exit 1
 }
 
@@ -65,13 +70,20 @@ run_commands_parallel_sequential() {
     # Run commands sequentially on each GPU in parallel
     for gpu in "${gpu_ids[@]}"; do
         (
+            gpu_status=0
             IFS=';' read -r -a commands <<< "${gpu_queues[$gpu]}"
             for cmd in "${commands[@]}"; do
                 if [ -n "$cmd" ]; then
                     echo "Running on GPU $gpu: $cmd"
                     CUDA_VISIBLE_DEVICES="$gpu" eval "$cmd"
+                    if [ $? -ne 0 ]; then
+                        gpu_status=1
+                        # Record the failed command
+                        echo "$cmd" >> "$temp_dir/failed_commands_gpu_$gpu"
+                    fi
                 fi
             done
+            echo $gpu_status > "$temp_dir/gpu_status_$gpu"
         ) &
     done
 
@@ -81,4 +93,37 @@ run_commands_parallel_sequential() {
 # Run all commands
 run_commands_parallel_sequential "${cmds[@]}"
 
-echo "All tasks have been completed."
+# Collect statuses and failed commands
+overall_status=0
+failed_commands=()
+for gpu in "${gpu_ids[@]}"; do
+    if [ -f "$temp_dir/gpu_status_$gpu" ]; then
+        gpu_status=$(cat "$temp_dir/gpu_status_$gpu")
+        if [ "$gpu_status" -ne 0 ]; then
+            overall_status=1
+            # Read the failed commands from the file
+            if [ -f "$temp_dir/failed_commands_gpu_$gpu" ]; then
+                while IFS= read -r line; do
+                    failed_commands+=("$line")
+                done < "$temp_dir/failed_commands_gpu_$gpu"
+            fi
+        fi
+    else
+        # If the status file doesn't exist, assume failure
+        overall_status=1
+    fi
+done
+
+# Clean up temporary files
+rm -rf "$temp_dir"
+
+# Display appropriate message
+if [ "$overall_status" -eq 0 ]; then
+    echo "All tasks have been completed successfully."
+else
+    echo "Some tasks failed."
+    echo "Failed commands:"
+    for cmd in "${failed_commands[@]}"; do
+        echo "$cmd"
+    done
+fi

@@ -82,7 +82,7 @@ class Flatten(nn.Module):
 class StegaStampEncoder(nn.Module):
     def __init__(self):
         super(StegaStampEncoder, self).__init__()
-        self.secret_dense = Dense(30, 768, activation='relu', kernel_initializer='he_normal')  # change from 100
+        self.secret_dense = Dense(100, 768, activation='relu', kernel_initializer='he_normal')  # change from 100
 
         self.conv1 = Conv2D(6, 32, 3, activation='relu')
         self.conv2 = Conv2D(32, 32, 3, activation='relu', strides=2)

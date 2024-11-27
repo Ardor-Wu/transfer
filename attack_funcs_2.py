@@ -13,6 +13,7 @@ from utils import GuidedDiffusion, dict2namespace, get_data_loaders_DB, get_data
 from torch import nn
 import yaml
 
+
 def save_images_and_compute_metrics(
         images, encoded_images, attk_images, decoded_messages, decoded_messages_attk_var,
         messages, num, save_dir, encode_wm, smooth
@@ -197,6 +198,7 @@ def wevade_transfer_batch(all_watermarked_image, target_length, model_list, wate
     elif os.path.exists(path) and not visualization and not no_cache:
         all_perturbations = torch.load(path, map_location='cpu').to(all_watermarked_image.device)
     else:
+        assert 0
         target_watermark_list = []
 
         with torch.no_grad():
@@ -294,6 +296,7 @@ def get_val_data_loader(data_name, hidden_config, train_options, val_dataset, tr
         raise ValueError(f"Unknown data_name: {data_name}")
     return val_data, data_type, max_batches
 
+
 class DiffPure:
     """Class for diffusion purification."""
 
@@ -334,6 +337,7 @@ class DiffPure:
 
     def __repr__(self):
         return self.__class__.__name__ + f'(steps={self.steps})'
+
 
 def compute_tdr_avg(decoded_rounded, decoded_rounded_attk, messages, smooth, median_bitwise_errors=None):
     """Compute the true detection rate average."""

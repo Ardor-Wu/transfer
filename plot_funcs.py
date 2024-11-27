@@ -1,86 +1,21 @@
 import os
-import pandas as pd
 import matplotlib.pyplot as plt
 from itertools import product
-from read_logs import get_experiment_settings
+from plot_utils import metric_to_label_custom, target_to_label
+import pandas as pd
+import seaborn as sns
 
-def main():
-    EXP = int(input('Enter the experiment number (1, 2, or 3): '))
 
-    # Get experiment settings
-    targets, plot_directory, experiments, ks, model_types, bits_list_per_target = get_experiment_settings(EXP)
-
-    # Load the processed DataFrame
-    df = pd.read_csv(f'processed_data_exp{EXP}.csv')
-
-    # Create plots
-    create_plots(df, EXP, plot_directory, bits_list_per_target, experiments)
-
-    print(f"Plots have been saved to the {plot_directory} directory.")
-
-def metric_to_label(metric):
-    if metric.lower() == 'ssim':
-        return 'SSIM'
-    elif 'auroc' in metric.lower():
-        if 'unattacked' in metric.lower():
-            return 'AUROC (Unattacked)'
-        else:
-            return 'AUROC'
-    else:
-        words = metric.replace('_', ' ').split()
-        return ' '.join([word.capitalize() for word in words])
-
-def target_to_label(target):
-    target_map = {
-        'hidden': 'HiDDeN',
-        'mbrs': 'MBRS',
-        'stega': 'StegaStamp'
-    }
-    return target_map.get(target.lower(), target)
-
-def metric_to_label_custom(metric):
-    if 'bitwise' in metric.lower():
-        return 'Bit-wise Accuracy'
-    else:
-        return metric_to_label(metric)
-
-def create_plots(df, EXP, plot_directory, bits_list_per_target, experiments):
-    # Create 'plots' directory if it doesn't exist
-    os.makedirs(plot_directory, exist_ok=True)
-
-    # List of metric columns to plot
-    metric_columns = df.columns.difference(['target', 'k', 'experiment', 'bits', 'model_type', 'source'])
-
-    # Update metric_columns to include 'Evasion_Rate' and 'Evasion_Rate_Unattacked' instead of 'tdr_attk' and 'tdr'
-    metric_columns = [col for col in metric_columns if col not in ['tdr', 'tdr_attk']]
-    metric_columns.extend(['Evasion_Rate_Unattacked', 'Evasion_Rate'])
-
-    # Get unique model_types
-    model_types = sorted(df['model_type'].unique())
-
-    # Create plots for each metric
-    for metric in metric_columns:
-        if EXP == 1:
-            # Existing logic for EXP == 1 (modified)
-            plot_exp1(df, metric, plot_directory, bits_list_per_target)
-        elif EXP == 2:
-            plot_exp2(df, metric, plot_directory, bits_list_per_target, experiments)
-        elif EXP == 3:
-            plot_exp3(df, metric, plot_directory, bits_list_per_target, experiments)
-
-    # For EXP == 2 and 3, add the plot for Evasion Rate vs Average L_inf Perturbation
-    if EXP == 2 or EXP == 3:
-        plot_evasion_vs_perturbation(df, bits_list_per_target, plot_directory, experiments, EXP)
-
-def plot_exp1(df, metric, plot_directory, bits_list_per_target):
+def plot_exp15(df, metric, plot_directory, bits_list_per_target, EXP=1):
     # Get model_types
     model_types = sorted(df['model_type'].unique())
 
-    # Define styles for different targets
+    # Define base styles for different targets and bits
     target_styles = {
-        'hidden': {'color': 'C0', 'marker': 'o', 'linestyle': '-'},
-        'mbrs': {'color': 'C1', 'marker': 's', 'linestyle': '--'},
-        'stega': {'color': 'C2', 'marker': '^', 'linestyle': '-.'}
+        ('hidden', 30): {'color': 'C4', 'marker': 'o', 'linestyle': '-'},
+        ('mbrs', 64): {'color': 'C1', 'marker': 's', 'linestyle': '--'},
+        ('mbrs', 256): {'color': 'C2', 'marker': 'D', 'linestyle': '--'},
+        ('stega', 100): {'color': 'C3', 'marker': '^', 'linestyle': '-.'}
     }
 
     # For each model_type, create a plot
@@ -95,7 +30,6 @@ def plot_exp1(df, metric, plot_directory, bits_list_per_target):
         # Plot different targets on the same plot
         for target in bits_list_per_target.keys():
             bits_list = bits_list_per_target[target]
-            style = target_styles.get(target, {})
             for bits in bits_list:
                 subset = df[
                     (df['target'] == target) &
@@ -134,6 +68,8 @@ def plot_exp1(df, metric, plot_directory, bits_list_per_target):
                         filename = f'{metric}_vs_k_model{model_type}.png'
                         if 'bitwise' in metric or metric == 'ssim':
                             invert_yaxis = True
+                    # Get the style based on target and bits
+                    style = target_styles.get((target, bits), {})
                     label = f'{target_to_label(target)} ({bits} bits)'
                     plt.plot(
                         subset['k'], y_values, label=label,
@@ -158,6 +94,7 @@ def plot_exp1(df, metric, plot_directory, bits_list_per_target):
         else:
             plt.close()
             print(f'No data available for metric {metric}, model_type {model_type}. Skipping plot.')
+
 
 def plot_exp2(df, metric, plot_directory, bits_list_per_target, experiments):
     bits_list = bits_list_per_target['hidden']
@@ -291,6 +228,7 @@ def plot_exp2(df, metric, plot_directory, bits_list_per_target, experiments):
         plt.close()
         print(f'No data available for metric {metric}. Skipping plot.')
 
+
 def plot_exp3(df, metric, plot_directory, bits_list_per_target, experiments):
     bits_list = bits_list_per_target['hidden']
     model_types_ordered = ['cnn', 'resnet']
@@ -308,10 +246,16 @@ def plot_exp3(df, metric, plot_directory, bits_list_per_target, experiments):
         'mean_budget_0.25_clamp_model': 'Clamp'
     }
 
+    # Define mapping from source names to labels
+    source_labels = {
+        'Stable Diffusion': 'DiffusionDB',
+        'Midjourney': 'Midjourney'
+    }
+
     # Loop over sources to plot separately
     for source in ['Stable Diffusion', 'Midjourney']:
         fig, axes = plt.subplots(nrows=num_rows, ncols=num_cols, figsize=(18, 10))
-        fig.suptitle(f'{metric_to_label_custom(metric)} vs Number of Models (k) - {source}', fontsize=24)
+        fig.suptitle(f'{metric_to_label_custom(metric)} vs Number of Models (k) - {source_labels[source]}', fontsize=24)
         data_plotted = False
 
         for idx, (model_type, bits) in enumerate(combinations):
@@ -405,7 +349,7 @@ def plot_exp3(df, metric, plot_directory, bits_list_per_target, experiments):
             else:
                 ax.axis('off')
                 print(
-                    f'No data available for metric {metric}, bits {bits}, model_type {model_type}, source {source}. Skipping subplot.')
+                    f'No data available for metric {metric}, bits {bits}, model_type {model_type}, source {source_labels[source]}. Skipping subplot.')
 
         # Create a unified legend outside the subplots
         if data_plotted:
@@ -425,12 +369,13 @@ def plot_exp3(df, metric, plot_directory, bits_list_per_target, experiments):
             plt.subplots_adjust(right=0.85)
             plt.tight_layout(rect=[0, 0.03, 0.85, 0.95])
 
-            filename = f'{metric}_vs_k_EXP3_{source.replace(" ", "_")}.png'
+            filename = f'{metric}_vs_k_EXP3_{source_labels[source].replace(" ", "_")}.png'
             plt.savefig(os.path.join(plot_directory, filename))
             plt.close()
         else:
             plt.close()
-            print(f'No data available for metric {metric}, source {source}. Skipping plot.')
+            print(f'No data available for metric {metric}, source {source_labels[source]}. Skipping plot.')
+
 
 def plot_evasion_vs_perturbation(df, bits_list_per_target, plot_directory, experiments, EXP):
     bits_list = bits_list_per_target['hidden']
@@ -487,7 +432,7 @@ def plot_evasion_vs_perturbation(df, bits_list_per_target, plot_directory, exper
                         (df['bits'] == bits) &
                         (df['model_type'] == model_type) &
                         (df['source'] == source)
-                    ]
+                        ]
 
                     if not subset.empty:
                         data_plotted = True
@@ -516,7 +461,8 @@ def plot_evasion_vs_perturbation(df, bits_list_per_target, plot_directory, exper
                     ax.tick_params(axis='both', which='major', labelsize=16)
                 else:
                     ax.axis('off')
-                    print(f'No data available for bits {bits}, model_type {model_type}, source {source}. Skipping subplot.')
+                    print(
+                        f'No data available for bits {bits}, model_type {model_type}, source {source}. Skipping subplot.')
 
             # Create a unified legend outside the subplots
             if data_plotted:
@@ -526,7 +472,8 @@ def plot_evasion_vs_perturbation(df, bits_list_per_target, plot_directory, exper
                 handles_unique = list(handles_labels.values())
 
                 # Place the legend outside the plot
-                fig.legend(handles_unique, labels_unique, loc='center right', fontsize=14, frameon=False, borderaxespad=0.1)
+                fig.legend(handles_unique, labels_unique, loc='center right', fontsize=14, frameon=False,
+                           borderaxespad=0.1)
                 plt.subplots_adjust(right=0.85)  # Adjust the right boundary to make room for the legend
 
                 plt.tight_layout(rect=[0, 0.03, 0.85, 0.95])  # Adjust layout to make room for the suptitle and legend
@@ -535,7 +482,8 @@ def plot_evasion_vs_perturbation(df, bits_list_per_target, plot_directory, exper
                 plt.close()
             else:
                 plt.close()
-                print(f'No data available for Evasion Rate vs Average L_inf Perturbation for source {source}. Skipping plot.')
+                print(
+                    f'No data available for Evasion Rate vs Average L_inf Perturbation for source {source}. Skipping plot.')
 
     elif EXP == 3:
         # Define styles for experiments
@@ -567,7 +515,7 @@ def plot_evasion_vs_perturbation(df, bits_list_per_target, plot_directory, exper
                     (df['bits'] == bits) &
                     (df['model_type'] == model_type) &
                     (df['source'] == source)
-                ]
+                    ]
 
                 if not subset_opt.empty:
                     plot_data_exists = True
@@ -590,7 +538,7 @@ def plot_evasion_vs_perturbation(df, bits_list_per_target, plot_directory, exper
                             (df['bits'] == bits) &
                             (df['model_type'] == model_type) &
                             (df['source'] == source)
-                        ]
+                            ]
                         if not subset_exp.empty:
                             plot_data_exists = True
                             data_plotted = True
@@ -611,7 +559,8 @@ def plot_evasion_vs_perturbation(df, bits_list_per_target, plot_directory, exper
                     ax.tick_params(axis='both', which='major', labelsize=16)
                 else:
                     ax.axis('off')
-                    print(f'No data available for bits {bits}, model_type {model_type}, source {source}. Skipping subplot.')
+                    print(
+                        f'No data available for bits {bits}, model_type {model_type}, source {source}. Skipping subplot.')
 
             # Create a unified legend outside the subplots
             if data_plotted:
@@ -626,7 +575,8 @@ def plot_evasion_vs_perturbation(df, bits_list_per_target, plot_directory, exper
                 labels_unique = list(legend_dict.keys())
                 handles_unique = list(legend_dict.values())
 
-                fig.legend(handles_unique, labels_unique, loc='center right', fontsize=14, frameon=False, borderaxespad=0.1)
+                fig.legend(handles_unique, labels_unique, loc='center right', fontsize=14, frameon=False,
+                           borderaxespad=0.1)
                 plt.subplots_adjust(right=0.85)
                 plt.tight_layout(rect=[0, 0.03, 0.85, 0.95])
 
@@ -635,7 +585,89 @@ def plot_evasion_vs_perturbation(df, bits_list_per_target, plot_directory, exper
                 plt.close()
             else:
                 plt.close()
-                print(f'No data available for Evasion Rate vs Average L_inf Perturbation for source {source}. Skipping plot.')
+                print(
+                    f'No data available for Evasion Rate vs Average L_inf Perturbation for source {source}. Skipping plot.')
 
-if __name__ == '__main__':
-    main()
+
+def plot_exp4(df, metric, plot_directory, bits_list_per_target):
+    # Define styles for different targets
+    target_styles = {
+        'hidden': {'color': 'C0'},
+        'mbrs': {'color': 'C1'},
+        'stega': {'color': 'C2'},
+        'RivaGAN': {'color': 'C3'}
+    }
+
+    plt.figure(figsize=(14, 8))
+    ylabel = metric_to_label_custom(metric)
+    title = f'{ylabel} Comparison Across Models'
+    filename = f'{metric}_comparison_exp4.png'
+
+    # Mapping experiments to legend-friendly labels
+    experiment_labels = {
+        'mean': 'OFT (k=1 Unnormalized)',
+        'mean_budget_0.25_clamp': 'OFT (k=1 Normalized)'
+    }
+
+    # Prepare data for plotting
+    plot_data = []
+
+    for target, bits_list in bits_list_per_target.items():
+        for bits in bits_list:
+            if target == 'mbrs' and bits == 64:
+                continue  # Exclude mbrs with 64 bits
+            for experiment in ['mean', 'mean_budget_0.25_clamp']:
+                subset = df[
+                    (df['target'] == target) &
+                    (df['bits'] == bits) &
+                    (df['experiment'] == experiment)
+                    ]
+                if not subset.empty:
+                    value = subset.iloc[0][metric]
+                    label = f'{target_to_label(target)}'  # Remove bits from label
+                    plot_data.append({
+                        'Model': label,
+                        'Experiment': experiment_labels[experiment],  # Use legend-friendly label
+                        metric: value
+                    })
+
+    if plot_data:
+        plot_df = pd.DataFrame(plot_data)
+
+        # Create a barplot with hue to separate experiments
+        sns.barplot(data=plot_df, x='Model', y=metric, hue='Experiment', palette='viridis')
+
+        plt.xlabel('Models', fontsize=16)
+        plt.ylabel(ylabel, fontsize=16)
+        plt.title(title, fontsize=18)
+        plt.xticks(fontsize=16)  # No rotation for captions
+        plt.yticks(fontsize=16)
+
+        # Add numerical values on the bars
+        for bar in plt.gca().patches:
+            height = bar.get_height()
+            if not pd.isna(height) and height > 0:  # Skip annotation for zero or NaN values
+                plt.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    height,
+                    f'{height:.3f}',
+                    ha='center',
+                    va='bottom',
+                    fontsize=16
+                )
+
+        # Adjust legend position to outside the plot
+        plt.legend(
+            fontsize=16,
+            title_fontsize=14,
+            loc='upper left',  # Adjust position
+            bbox_to_anchor=(1, 1),  # Place the legend outside the plot
+            frameon=False  # Remove legend box
+        )
+
+        plt.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust layout to make space for the legend
+        plt.savefig(os.path.join(plot_directory, filename), dpi=300)
+        plt.close()
+    else:
+        plt.close()
+        print(f'No data available for metric {metric}. Skipping plot.')
